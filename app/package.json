@@ -1,0 +1,17 @@
+{
+  "name": "loadtest-sim-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase 01 baseline app - intentionally naive, single process, no optimization",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.38.4",
+    "fastify": "^5.2.1",
+    "pg": "^8.13.1",
+    "prom-client": "^15.1.3"
+  }
+}

@@ -1,0 +1,119 @@
+# Phase 01 - 의도적으로 취약한 기준선
+#
+# 없는 것(의도적): 캐시, 메시지 큐, 로드밸런서, 리버스 프록시, HTTPS, 앱 클러스터링.
+# 리소스 상한을 명시적으로 박아 둔다. 이게 없으면 다음 주에 같은 숫자가 안 나온다.
+#
+# colima VM: 6 CPU / 8GB 기준으로 배분했다.
+#   app 2.0 + postgres 2.0 + k6 1.5 + 관측 0.5 = 6.0
+
+name: loadtest-sim
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: lts-postgres
+    # 설정을 일절 건드리지 않는다. max_connections=100, shared_buffers=128MB 기본값 그대로.
+    # postgres.conf 튜닝은 Phase 02 의 주제다.
+    environment:
+      POSTGRES_USER: lts
+      POSTGRES_PASSWORD: lts
+      POSTGRES_DB: lts
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lts -d lts"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    cpus: 2.0
+    mem_limit: 2g
+
+  app:
+    build: ./app
+    container_name: lts-app
+    # 단일 프로세스. 클러스터링 없음. 레플리카 없음.
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://lts:lts@postgres:5432/lts
+      # PG_POOL_MAX 를 주지 않으면 node-postgres 기본값 10.
+      # Phase 01 에서는 절대 지정하지 않는다.
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    cpus: 2.0
+    mem_limit: 1g
+    restart: unless-stopped
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
+    container_name: lts-pg-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://lts:lts@postgres:5432/lts?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    cpus: 0.2
+    mem_limit: 128m
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: lts-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+      # k6 가 --out experimental-prometheus-rw 로 지표를 밀어 넣을 수 있게 한다.
+      # 앱 지표와 부하 지표가 같은 타임라인에 올라와야 원인 규명이 된다.
+      - --web.enable-remote-write-receiver
+      - --enable-feature=native-histograms
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    cpus: 0.5
+    mem_limit: 1g
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    container_name: lts-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: light
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    cpus: 0.3
+    mem_limit: 512m
+
+  # 기본 기동에 포함하지 않는다. `docker compose run --rm k6 run /scripts/<파일>` 로 실행.
+  k6:
+    image: grafana/k6:0.56.0
+    # container_name 을 두지 않는다. `docker compose run` 은 자체 이름
+    # (loadtest-sim-k6-run-<해시>)으로 컨테이너를 띄우므로 고정 이름과 충돌한다.
+    profiles: ["load"]
+    environment:
+      BASE_URL: http://app:3000
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_STATS: "p(50),p(90),p(95),p(99),max"
+      K6_PROMETHEUS_RW_PUSH_INTERVAL: "1s"
+    volumes:
+      - ./k6:/scripts:ro
+      - ./results:/results
+    cpus: 1.5
+    mem_limit: 2g
+
+volumes:
+  pgdata:
+  promdata:
