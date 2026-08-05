@@ -30,6 +30,10 @@ http.setResponseCallback(http.expectedStatuses(200, 201));
 
 export const options = {
   discardResponseBodies: true, // 생성기 CPU/메모리를 아낀다. 우리는 상태코드만 본다.
+  // Phase 02 에서 이 사다리를 HTTPS 로도 쓴다. 자체서명이라 검증을 건너뛴다.
+  insecureSkipTLSVerify: true,
+  // NO_REUSE=1 이면 요청마다 새 커넥션 -> 핸드쉐이크 강제
+  noConnectionReuse: __ENV.NO_REUSE === '1',
   summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
   scenarios: {
     // 워밍업은 별도 시나리오로 분리하고 phase 태그를 달아 분석에서 제외한다.
@@ -92,9 +96,18 @@ export function handleSummary(data) {
     '',
   ].join('\n');
 
+  // LABEL 로 파일명을 나눈다. 예전엔 항상 breaking-point.json 에 써서
+  // 다른 실험 결과와 덮어쓰기/혼동이 났다.
+  const label = __ENV.LABEL || 'breaking-point';
+
+  const hs = data.metrics.http_req_tls_handshaking;
+  const tlsLine = hs && hs.values.avg > 0
+    ? `TLS 핸드쉐이크 avg=${hs.values.avg.toFixed(2)}ms p99=${hs.values['p(99)'].toFixed(2)}ms  <- 핸드쉐이크가 실제로 발생함\n`
+    : 'TLS 핸드쉐이크 없음 (평문이거나 커넥션 재사용 중)\n';
+
   return {
-    stdout: out + plan,
-    '/results/breaking-point.json': JSON.stringify(
+    stdout: out + tlsLine + '\n' + plan,
+    [`/results/${label}.json`]: JSON.stringify(
       { schedule, warmupSec: WARMUP_SEC, gapSec: GAP_SEC, metrics: data.metrics },
       null,
       2,

@@ -38,16 +38,41 @@ services:
     environment:
       PORT: 3000
       DATABASE_URL: postgres://lts:lts@postgres:5432/lts
-      # PG_POOL_MAX 를 주지 않으면 node-postgres 기본값 10.
-      # Phase 01 에서는 절대 지정하지 않는다.
+      # PG_POOL_MAX 를 주지 않으면 node-postgres 기본값 10. Phase 01~02 에서는 지정하지 않는다.
+      #
+      # Phase 02: off | ecdsa | rsa
+      # 한 실행에 한 모드만. 두 프로토콜을 동시에 열면 CPU 귀속이 불가능해진다.
+      TLS_MODE: ${TLS_MODE:-off}
+      TLS_MIN_VERSION: ${TLS_MIN_VERSION:-TLSv1.2}
+      TLS_MAX_VERSION: ${TLS_MAX_VERSION:-TLSv1.3}
     ports:
       - "3000:3000"
+    volumes:
+      - ./certs:/certs:ro
     depends_on:
       postgres:
         condition: service_healthy
     cpus: 2.0
     mem_limit: 1g
     restart: unless-stopped
+
+  # Phase 02-B: 앞단에서 TLS 를 종료하는 리버스 프록시.
+  # 8080 = 평문 통과 (프록시 홉 비용만 재기 위한 대조군)
+  # 8443 = TLS 종료 후 뒤쪽 앱에는 평문으로 전달
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: lts-nginx
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/certs:ro
+    depends_on:
+      - app
+    cpus: 1.5
+    mem_limit: 256m
+
 
   postgres-exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
@@ -76,7 +101,7 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - promdata:/prometheus
     cpus: 0.5
-    mem_limit: 1g
+    mem_limit: 2g
 
   grafana:
     image: grafana/grafana:11.5.1
@@ -107,7 +132,7 @@ services:
       BASE_URL: http://app:3000
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
       K6_PROMETHEUS_RW_TREND_STATS: "p(50),p(90),p(95),p(99),max"
-      K6_PROMETHEUS_RW_PUSH_INTERVAL: "1s"
+      K6_PROMETHEUS_RW_PUSH_INTERVAL: "5s"
     volumes:
       - ./k6:/scripts:ro
       - ./results:/results

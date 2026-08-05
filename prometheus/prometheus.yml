@@ -10,6 +10,18 @@ scrape_configs:
     static_configs:
       - targets: ["app:3000"]
 
+  # 앱이 TLS_MODE!=off 로 뜨면 3000 포트가 HTTPS 가 된다.
+  # 위의 평문 job 은 그때 스크레이프에 실패하므로, HTTPS 용 job 을 하나 더 둔다.
+  # 두 job 중 하나만 살아 있게 되고, 질의는 job=~"app|app_tls" 로 둘 다 본다.
+  - job_name: app_tls
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true   # 자체서명. 실험용에서만 허용된다.
+    scrape_interval: 1s
+    scrape_timeout: 900ms
+    static_configs:
+      - targets: ["app:3000"]
+
   - job_name: postgres
     scrape_interval: 2s
     static_configs:
@@ -18,3 +30,4 @@ scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
+

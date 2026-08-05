@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import crypto from 'node:crypto';
 import Fastify from 'fastify';
 import { createReservation } from './reservation.js';
 import { closeDb, poolConfig } from './db.js';
@@ -5,10 +7,37 @@ import {
   registry, httpRequestDuration, httpRequestsInFlight, reservationOutcomes,
 } from './metrics.js';
 
-// 요청당 로그를 남기면 Docker json-file 드라이버가 먼저 병목이 된다.
-// 그러면 우리가 재려던 것(앱/DB 한계) 대신 로깅 처리량을 재게 된다.
-// 기준선에서는 요청 로그를 끄고, 이 결정을 lab 문서에 기록한다.
-const app = Fastify({ logger: false, disableRequestLogging: true });
+// Phase 02: 앱이 직접 TLS 를 종료할지 결정한다.
+//   off   -> 평문 HTTP (Phase 01 기준선)
+//   ecdsa -> HTTPS, ECDSA P-256 인증서
+//   rsa   -> HTTPS, RSA 2048 인증서
+//
+// 한 번의 실행에는 한 가지 모드만 쓴다. 두 프로토콜을 동시에 열면
+// CPU 사용량이 누구 것인지 구분이 안 되기 때문이다.
+const tlsMode = process.env.TLS_MODE ?? 'off';
+
+const serverOptions = { logger: false, disableRequestLogging: true };
+
+if (tlsMode !== 'off') {
+  const certDir = process.env.CERT_DIR ?? '/certs';
+  serverOptions.https = {
+    key: fs.readFileSync(`${certDir}/${tlsMode}-key.pem`),
+    cert: fs.readFileSync(`${certDir}/${tlsMode}-cert.pem`),
+    // 버전을 고정할 수 있게 열어둔다. 기본은 1.2~1.3 협상.
+    minVersion: process.env.TLS_MIN_VERSION || 'TLSv1.2',
+    maxVersion: process.env.TLS_MAX_VERSION || 'TLSv1.3',
+  };
+
+  // 세션 재개(session ticket)를 기본으로 끈다.
+  // 켜져 있으면 두 번째 핸드쉐이크부터 비싼 서명 연산을 건너뛰어서,
+  // 우리가 재려는 "전체 핸드쉐이크 비용"이 희석된다.
+  // 재개의 효과 자체를 재고 싶을 때 TLS_RESUMPTION=on 으로 켠다.
+  if ((process.env.TLS_RESUMPTION ?? 'off') === 'off') {
+    serverOptions.https.secureOptions = crypto.constants.SSL_OP_NO_TICKET;
+  }
+}
+
+const app = Fastify(serverOptions);
 
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -92,7 +121,16 @@ app.post('/api/v1/events/:eventId/reservations', async (req, reply) => {
 // 이 라우트로 목표 RPS 의 3~5배가 안 나오면 그 실험은 서버가 아니라 k6 를 잰 것이다.
 app.get('/_sanity', async () => ({ ok: true, ts: Date.now() }));
 
-app.get('/healthz', async () => ({ ok: true, poolMax: poolConfig.max }));
+app.get('/healthz', async (req) => ({
+  ok: true,
+  poolMax: poolConfig.max,
+  tlsMode,
+  // req.socket.getCipher() 는 TLS 커넥션에서만 존재한다.
+  // 실제로 어떤 버전/암호가 협상됐는지 실행 중에 확인할 수 있어야 한다.
+  tls: req.socket.getCipher
+    ? { ...req.socket.getCipher(), protocol: req.socket.getProtocol?.() }
+    : null,
+}));
 
 app.get('/metrics', async (req, reply) => {
   reply.header('Content-Type', registry.contentType);
@@ -102,7 +140,10 @@ app.get('/metrics', async (req, reply) => {
 const port = Number(process.env.PORT ?? 3000);
 
 app.listen({ port, host: '0.0.0.0' })
-  .then(() => process.stdout.write(`app listening on ${port} (pool max=${poolConfig.max})\n`))
+  .then(() => process.stdout.write(
+    `app listening on ${port} scheme=${tlsMode === 'off' ? 'http' : 'https'} `
+    + `tlsMode=${tlsMode} poolMax=${poolConfig.max}\n`,
+  ))
   .catch((err) => {
     process.stderr.write(`listen_failed ${err.message}\n`);
     process.exit(1);
