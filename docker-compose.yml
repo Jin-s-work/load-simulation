@@ -8,6 +8,28 @@
 
 name: loadtest-sim
 
+x-app-base: &app-base
+  build: ./app
+  sysctls:
+    # (c) accept 큐의 커널 상한. Node 는 스레드가 하나라 바쁠 때 accept 가 늦어진다.
+    - net.core.somaxconn=${APP_SOMAXCONN:-4096}
+  volumes:
+    - ./certs:/certs:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+  cpus: 1.2
+  mem_limit: 512m
+  restart: unless-stopped
+
+x-app-env: &app-env
+  PORT: 3000
+  DATABASE_URL: postgres://lts:lts@postgres:5432/lts
+  TLS_MODE: ${TLS_MODE:-off}
+  TLS_MIN_VERSION: ${TLS_MIN_VERSION:-TLSv1.2}
+  TLS_MAX_VERSION: ${TLS_MAX_VERSION:-TLSv1.3}
+  APP_BACKLOG: ${APP_BACKLOG:-511}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -31,37 +53,88 @@ services:
     cpus: 2.0
     mem_limit: 2g
 
-  app:
-    build: ./app
-    container_name: lts-app
-    # 단일 프로세스. 클러스터링 없음. 레플리카 없음.
+  # ---------------------------------------------------------------------------
+  # Phase 03: 앱 3대. Phase 01~02 의 단일 `app` 서비스를 대체한다.
+  # (Phase 02 구성을 그대로 돌리려면 `git checkout phase-02`)
+  #
+  # cpus 는 1.2 로 둔다. Phase 01 에서 관측한 단일 스레드 상한이 1.15 코어라 사실상
+  # 구속하지 않으면서, 한 대가 폭주해 다른 대를 굶기는 것만 막는다.
+  # ---------------------------------------------------------------------------
+  app1:
+    <<: *app-base
+    container_name: lts-app1
     environment:
-      PORT: 3000
-      DATABASE_URL: postgres://lts:lts@postgres:5432/lts
-      # PG_POOL_MAX 를 주지 않으면 node-postgres 기본값 10. Phase 01~02 에서는 지정하지 않는다.
-      #
-      # Phase 02: off | ecdsa | rsa
-      # 한 실행에 한 모드만. 두 프로토콜을 동시에 열면 CPU 귀속이 불가능해진다.
-      TLS_MODE: ${TLS_MODE:-off}
-      TLS_MIN_VERSION: ${TLS_MIN_VERSION:-TLSv1.2}
-      TLS_MAX_VERSION: ${TLS_MAX_VERSION:-TLSv1.3}
+      <<: *app-env
+      INSTANCE_ID: app1
+      SLOW_MS: ${APP1_SLOW_MS:-0}
+      DRAIN_WAIT_MS: ${APP1_DRAIN_WAIT_MS:-0}
+
+  app2:
+    <<: *app-base
+    container_name: lts-app2
+    environment:
+      <<: *app-env
+      INSTANCE_ID: app2
+      SLOW_MS: ${APP2_SLOW_MS:-0}
+      DRAIN_WAIT_MS: ${APP2_DRAIN_WAIT_MS:-0}
+
+  app3:
+    <<: *app-base
+    container_name: lts-app3
+    environment:
+      <<: *app-env
+      INSTANCE_ID: app3
+      SLOW_MS: ${APP3_SLOW_MS:-0}
+      DRAIN_WAIT_MS: ${APP3_DRAIN_WAIT_MS:-0}
+
+  # ---------------------------------------------------------------------------
+  # Phase 03 의 주인공. L7 로드밸런서.
+  # 실험용 값은 전부 환경변수. 한 번에 하나만 바꾼다.
+  # ---------------------------------------------------------------------------
+  haproxy:
+    image: haproxy:3.0-alpine
+    container_name: lts-haproxy
+    environment:
+      LB_ALGO: ${LB_ALGO:-roundrobin}          # roundrobin | leastconn | source
+      LB_MAXCONN: ${LB_MAXCONN:-20000}         # (a) 프로세스 전체 커넥션 상한
+      LB_FE_MAXCONN: ${LB_FE_MAXCONN:-20000}   # (a) 프론트엔드 상한
+      LB_SRV_MAXCONN: ${LB_SRV_MAXCONN:-2000}  # 백엔드 1대당 동시 요청 상한
+      LB_BACKLOG: ${LB_BACKLOG:-4096}          # (c) accept 큐 길이
+      LB_HTTP_REUSE: ${LB_HTTP_REUSE:-safe}    # (b) safe | never
+      LB_POOL_MAX_CONN: ${LB_POOL_MAX_CONN:-100}
+      LB_CHECK_INTER: ${LB_CHECK_INTER:-2s}    # 헬스체크 주기
+      LB_CHECK_FALL: ${LB_CHECK_FALL:-3}       # 연속 N회 실패 -> 제거
+      LB_CHECK_RISE: ${LB_CHECK_RISE:-2}       # 연속 N회 성공 -> 복귀
     ports:
-      - "3000:3000"
+      - "8000:8000"
+      - "8404:8404"
     volumes:
-      - ./certs:/certs:ro
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    sysctls:
+      # (b) ephemeral 포트 범위. 좁히면 포트 고갈이 빨리 재현된다.
+      - net.ipv4.ip_local_port_range=${LB_PORT_RANGE:-32768 60999}
+      # (c) accept 큐의 커널 쪽 상한. bind backlog 와 둘 중 작은 값이 적용된다.
+      - net.core.somaxconn=${LB_SOMAXCONN:-4096}
+    ulimits:
+      # (a) 파일 디스크립터 상한. 커넥션 하나가 fd 하나다.
+      nofile:
+        soft: ${LB_NOFILE:-65535}
+        hard: ${LB_NOFILE:-65535}
     depends_on:
-      postgres:
-        condition: service_healthy
-    cpus: 2.0
-    mem_limit: 1g
-    restart: unless-stopped
+      - app1
+      - app2
+      - app3
+    cpus: 1.5
+    mem_limit: 512m
 
   # Phase 02-B: 앞단에서 TLS 를 종료하는 리버스 프록시.
   # 8080 = 평문 통과 (프록시 홉 비용만 재기 위한 대조군)
   # 8443 = TLS 종료 후 뒤쪽 앱에는 평문으로 전달
+  # Phase 02 유물. 기본 기동에서 제외한다 (Phase 03 은 HAProxy 가 주인공).
   nginx:
     image: nginx:1.27-alpine
     container_name: lts-nginx
+    profiles: ["phase02"]
     ports:
       - "8080:8080"
       - "8443:8443"
@@ -69,7 +142,7 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./certs:/certs:ro
     depends_on:
-      - app
+      - app1
     cpus: 1.5
     mem_limit: 256m
 

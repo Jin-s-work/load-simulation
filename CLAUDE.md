@@ -79,9 +79,9 @@ k6 → 로드밸런서 → 앱서버 → DB 구조를 로컬 Docker Compose 위�
 |---|---|---|
 | 01 | 취약 기준선 + 측정 신뢰성 (k6 부하 모델, 워밍업, 생성기 한계, 앱 단독 상한) | ✅ 천장 2000 RPS / 병목 = 앱 단일 스레드 CPU |
 | 02 | HTTPS TLS 핸드쉐이크 부하 (앱 종료 vs 프록시 종료) | ✅ 핸드쉐이크 강제 시 천장 절반 / 프록시 오프로딩으로 회복 |
-| 03 | ORM 커넥션 풀링 + DB 메모리/유휴 커넥션 | 풀 크기-처리량 곡선을 그렸다 |
-| 04 | DB 프록시 (PgBouncer) | 풀 한계를 프록시로 우회한 전후 수치가 있다 |
-| 05 | 리버스 프록시 / 로드밸런싱 알고리즘 / 헬스체크 | 앱 N대에서 알고리즘별 p99 차이를 측정했다 |
+| 03 | 리버스 프록시 / 로드밸런싱 알고리즘 / 헬스체크 | ✅ least-conn 이 p99 7.4배 개선 / drain 유무가 p99 45배 |
+| 04 | ORM 커넥션 풀링 + DB 메모리/유휴 커넥션 | 풀 크기-처리량 곡선을 그렸다 |
+| 05 | DB 프록시 (PgBouncer) | 풀 한계를 프록시로 우회한 전후 수치가 있다 |
 | 06 | 로컬 캐시 vs Redis | 두 방식의 히트율/일관성/p99 트레이드오프를 측정했다 |
 | 07 | Message Queue 기반 분산처리 | 동기 경로 축소 전후 p99와 큐 lag을 측정했다 |
 | 08 | 서버리스 + 클라우드 확장 | 로컬에서 찾은 병목이 클라우드 제약에 어떻게 대응되는지 정리했다 |
@@ -112,10 +112,22 @@ POST /api/v1/events/{eventId}/reservations
 
 ## 스택
 
-미확정. Phase 00 시작 전에 내 승인을 받아 확정하고 이 섹션을 갱신한다.
-확정 전까지는 특정 스택을 전제한 코드를 쓰지 않는다.
+확정(Phase 01). 전부 Docker Compose 로 로컬에서 재현 가능해야 한다. 클라우드 의존은 Phase 08 전까지 금지.
 
-전제 조건: 전부 Docker Compose 로 로컬에서 재현 가능해야 한다. 클라우드 의존은 Phase 08 전까지 금지.
+| 계층 | 선택 |
+|---|---|
+| 런타임 | colima (Lima + vz), VM **6 CPU / 8GB**, mount-type sshfs |
+| 앱 | Node 24 · Fastify 5 · Drizzle ORM · node-postgres. **단일 프로세스** (Phase 03 부터 3대) |
+| DB | Postgres 16-alpine, 설정 무수정 (풀 기본값 10) |
+| LB / 프록시 | HAProxy 3.0 (Phase 03~). nginx 는 Phase 02 의 TLS 종료용으로만 사용 |
+| 부하 생성 | k6 0.56 |
+| 관측 | Prometheus + Grafana + postgres_exporter + `docker stats` 샘플러 + `/proc/net` 캡처 |
+
+Prisma 대신 Drizzle 을 쓴 이유: 커넥션 풀(node-postgres)이 그대로 노출되어
+`totalCount/idleCount/waitingCount` 와 획득 대기시간을 직접 계측할 수 있다.
+
+**쓰지 않기로 한 것**: cAdvisor. colima 에서 컨테이너 이름 라벨을 못 붙였고,
+대량 시계열로 Prometheus 를 OOM 시켰다 (docs/labs/02-tls.md 참고).
 
 ---
 

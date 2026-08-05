@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import Fastify from 'fastify';
 import { createReservation } from './reservation.js';
-import { closeDb, poolConfig } from './db.js';
+import { closeDb, poolConfig, pool } from './db.js';
 import {
   registry, httpRequestDuration, httpRequestsInFlight, reservationOutcomes,
 } from './metrics.js';
@@ -38,6 +38,26 @@ if (tlsMode !== 'off') {
 }
 
 const app = Fastify(serverOptions);
+
+// ---------------------------------------------------------------------------
+// Phase 03 실험용 손잡이
+// ---------------------------------------------------------------------------
+
+// 어느 인스턴스가 처리했는지 구분한다. LB 가 실제로 분배하고 있는지 확인하는 근거가 된다.
+const INSTANCE_ID = process.env.INSTANCE_ID ?? 'app';
+
+// 인위적 지연 주입. 실험 (d) 에서 3대 중 1대만 느리게 만든다.
+// setTimeout 이라 이벤트 루프를 막지 않는다 = "느린 백엔드"를 흉내낼 뿐 CPU 를 태우지 않는다.
+const SLOW_MS = Number(process.env.SLOW_MS ?? 0);
+
+// readiness. graceful shutdown 실험에서 "LB 에게 먼저 빠지겠다고 알리는" 스위치.
+let ready = true;
+
+// 종료 절차에서 LB 가 헬스체크로 감지할 때까지 기다릴 시간.
+// 이걸 0 으로 두면 readiness 를 내려도 LB 가 모르는 채로 프로세스가 죽는다 = 죽은 구간 발생.
+const DRAIN_WAIT_MS = Number(process.env.DRAIN_WAIT_MS ?? 0);
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -81,6 +101,9 @@ app.post('/api/v1/events/:eventId/reservations', async (req, reply) => {
   }
 
   try {
+    // 실험 (d): 이 인스턴스만 느리게 만든다. CPU 를 태우지 않는 순수 지연이다.
+    if (SLOW_MS > 0) await sleep(SLOW_MS);
+
     const result = await createReservation({ eventId, userId, quantity, idempotencyKey });
     reservationOutcomes.inc({ outcome: result.outcome });
 
@@ -121,8 +144,33 @@ app.post('/api/v1/events/:eventId/reservations', async (req, reply) => {
 // 이 라우트로 목표 RPS 의 3~5배가 안 나오면 그 실험은 서버가 아니라 k6 를 잰 것이다.
 app.get('/_sanity', async () => ({ ok: true, ts: Date.now() }));
 
-app.get('/healthz', async (req) => ({
+// LB 가 보는 헬스체크.
+// 의도적으로 DB 를 확인하지 않는다. DB 를 확인하면 DB 가 잠깐 느려질 때
+// 3대가 "동시에" unhealthy 가 되어 전멸한다(상관 실패). 근거는 docs/labs/03 참고.
+// ready 가 false 면 503 을 돌려 LB 가 스스로 빼도록 한다.
+app.get('/healthz', async (req, reply) => {
+  if (!ready) {
+    return reply.code(503).send({ ok: false, instance: INSTANCE_ID, reason: 'draining' });
+  }
+  return { ok: true, instance: INSTANCE_ID, slowMs: SLOW_MS };
+});
+
+// 의존성까지 확인하는 엔드포인트. **LB 판정에 쓰지 않는다.** 사람이 보는 용도다.
+app.get('/health/deep', async (req, reply) => {
+  try {
+    const t0 = process.hrtime.bigint();
+    await pool.query('SELECT 1');
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    return { ok: true, instance: INSTANCE_ID, db: { ok: true, latencyMs: Number(ms.toFixed(2)) } };
+  } catch (err) {
+    return reply.code(503).send({ ok: false, instance: INSTANCE_ID, db: { ok: false, error: err.code ?? err.message } });
+  }
+});
+
+app.get('/debug/info', async (req) => ({
   ok: true,
+  instance: INSTANCE_ID,
+  ready,
   poolMax: poolConfig.max,
   tlsMode,
   // req.socket.getCipher() 는 TLS 커넥션에서만 존재한다.
@@ -132,6 +180,13 @@ app.get('/healthz', async (req) => ({
     : null,
 }));
 
+// 실험 (e) 비교용: readiness 를 손으로 내렸다 올린다.
+// 실서비스에 이런 라우트를 열어두면 안 된다. 실험 전용이다.
+app.post('/debug/ready/:state', async (req) => {
+  ready = req.params.state === 'on';
+  return { ok: true, instance: INSTANCE_ID, ready };
+});
+
 app.get('/metrics', async (req, reply) => {
   reply.header('Content-Type', registry.contentType);
   return registry.metrics();
@@ -139,7 +194,11 @@ app.get('/metrics', async (req, reply) => {
 
 const port = Number(process.env.PORT ?? 3000);
 
-app.listen({ port, host: '0.0.0.0' })
+// backlog = accept 대기줄 길이. 커널의 somaxconn 과 둘 중 작은 값이 적용된다.
+// 실험 (c): 이걸 좁히고 앱이 바쁘게 만들면 커널이 새 연결을 조용히 버린다(ListenOverflows).
+const backlog = Number(process.env.APP_BACKLOG ?? 511);
+
+app.listen({ port, host: '0.0.0.0', backlog })
   .then(() => process.stdout.write(
     `app listening on ${port} scheme=${tlsMode === 'off' ? 'http' : 'https'} `
     + `tlsMode=${tlsMode} poolMax=${poolConfig.max}\n`,
@@ -149,10 +208,33 @@ app.listen({ port, host: '0.0.0.0' })
     process.exit(1);
   });
 
+// ---------------------------------------------------------------------------
+// Graceful shutdown
+//
+// 순서가 전부다. 프로세스를 먼저 죽이고 LB 가 나중에 아는 게 아니라,
+// LB 가 먼저 빼고 그 다음에 죽어야 한다.
+//
+//   1) readiness 를 내린다        -> 헬스체크가 503 을 받기 시작
+//   2) LB 가 감지할 때까지 기다린다 -> ★ 이걸 빼면 1)이 아무 의미가 없다
+//   3) 새 커넥션 수락 중단 + 처리 중인 요청 완료 대기 (app.close)
+//   4) 자원 정리
+//
+// DRAIN_WAIT_MS=0 이면 2)가 없는 상태 = 죽은 구간이 그대로 발생한다.
+// 실험 (e) 에서 0 과 (interval x fall) 이상을 비교한다.
+// ---------------------------------------------------------------------------
+let shuttingDown = false;
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    ready = false;
+    process.stdout.write(`shutdown: readiness=false, draining ${DRAIN_WAIT_MS}ms\n`);
+    if (DRAIN_WAIT_MS > 0) await sleep(DRAIN_WAIT_MS);
+
     await app.close();
     await closeDb();
+    process.stdout.write('shutdown: complete\n');
     process.exit(0);
   });
 }

@@ -3,24 +3,21 @@ global:
   evaluation_interval: 5s
 
 scrape_configs:
-  # 앱은 1초 해상도로 긁는다. 계단이 60초씩이라 5초 해상도로는 계단 안의 변화를 놓친다.
+  # 앱 3대. Prometheus 가 붙여주는 instance 라벨로 인스턴스별 분배를 확인한다.
+  # 1초 해상도로 긁는다. 헬스체크 감지 구간이 몇 초 단위라 5초로는 놓친다.
   - job_name: app
     scrape_interval: 1s
     scrape_timeout: 900ms
     static_configs:
-      - targets: ["app:3000"]
+      - targets: ["app1:3000", "app2:3000", "app3:3000"]
 
-  # 앱이 TLS_MODE!=off 로 뜨면 3000 포트가 HTTPS 가 된다.
-  # 위의 평문 job 은 그때 스크레이프에 실패하므로, HTTPS 용 job 을 하나 더 둔다.
-  # 두 job 중 하나만 살아 있게 되고, 질의는 job=~"app|app_tls" 로 둘 다 본다.
-  - job_name: app_tls
-    scheme: https
-    tls_config:
-      insecure_skip_verify: true   # 자체서명. 실험용에서만 허용된다.
+  # Phase 03 의 주인공. HAProxy 내장 Prometheus 익스포터.
+  # 백엔드 up/down, 큐 길이, 커넥션 거부 등 이번 실험의 핵심 지표가 여기서 나온다.
+  - job_name: haproxy
     scrape_interval: 1s
-    scrape_timeout: 900ms
+    metrics_path: /metrics
     static_configs:
-      - targets: ["app:3000"]
+      - targets: ["haproxy:8404"]
 
   - job_name: postgres
     scrape_interval: 2s
@@ -31,3 +28,5 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
+# 참고: Phase 02 의 HTTPS 스크레이프 설정(job: app_tls)은 이 파일에서 제거했다.
+# Phase 03 은 TLS 를 끄고 LB 계층만 본다. Phase 02 구성은 git tag phase-02 에 있다.

@@ -3,3 +3,6 @@ results/*.log
 results/*.json
 !results/.gitkeep
 .DS_Store
+results/*.csv
+results/*.md
+results/*.events.log
