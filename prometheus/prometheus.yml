@@ -11,6 +11,14 @@ scrape_configs:
     static_configs:
       - targets: ["app1:3000", "app2:3000", "app3:3000"]
 
+  # 클러스터 모드에서는 워커마다 3011+ 포트로 자기 지표를 낸다.
+  # 워커 수보다 많은 타깃은 down 이 된다(정상). 질의는 sum() 으로 합친다.
+  - job_name: app_worker
+    scrape_interval: 1s
+    scrape_timeout: 900ms
+    static_configs:
+      - targets: ["app1:3011", "app1:3012", "app1:3013", "app1:3014"]
+
   # Phase 03 의 주인공. HAProxy 내장 Prometheus 익스포터.
   # 백엔드 up/down, 큐 길이, 커넥션 거부 등 이번 실험의 핵심 지표가 여기서 나온다.
   - job_name: haproxy

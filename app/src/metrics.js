@@ -9,6 +9,11 @@ client.collectDefaultMetrics({
   eventLoopMonitoringPrecision: 10,
 });
 
+// 클러스터 모드에서 프라이머리가 워커 지표를 모을 때 "어느 레지스트리를 보고할지" 알려준다.
+// 우리는 기본 전역 레지스트리가 아니라 커스텀 레지스트리를 쓰므로 이 줄이 없으면
+// 프라이머리가 빈 지표를 모으게 된다.
+client.AggregatorRegistry.setRegistries(registry);
+
 // 지연 버킷은 SLO(p99 < 200ms) 주변을 촘촘하게 잡는다.
 // 버킷이 성기면 histogram_quantile 이 p99 를 크게 왜곡한다.
 const LATENCY_BUCKETS = [
@@ -50,6 +55,38 @@ export const reservationOutcomes = new client.Counter({
   labelNames: ['outcome'],
   registers: [registry],
 });
+
+// ---------------------------------------------------------------------------
+// Phase 04: 과부하 지표
+// ---------------------------------------------------------------------------
+export const overloadMetrics = {
+  // 이벤트 루프 지연을 100ms 주기로 직접 잰 값.
+  // prom-client 의 nodejs_eventloop_lag_* 는 저부하에서 12~22ms 의 노이즈 바닥이 있어
+  // Phase 01 에서 판별력이 없다고 판단했다. 이건 그 대안이다.
+  loopLagGauge: new client.Gauge({
+    name: 'app_event_loop_lag_ms',
+    help: 'setInterval 예약 시각 대비 실제 실행 시각의 차이 (ms)',
+    registers: [registry],
+  }),
+
+  // 거절한 요청 수. 이유별로 나눈다.
+  shedTotal: new client.Counter({
+    name: 'app_shed_total',
+    help: '과부하로 즉시 거절한 요청 수',
+    labelNames: ['reason'],   // bulkhead | queue_length | loop_lag
+    registers: [registry],
+  }),
+
+  // 타임아웃으로 포기한 요청 수
+  timeoutTotal: new client.Counter({
+    name: 'app_request_timeout_total',
+    help: '타임아웃으로 응답을 포기한 요청 수',
+    registers: [registry],
+  }),
+
+  // 힙 사용량은 collectDefaultMetrics 가 nodejs_heap_size_used_bytes 로 이미 준다.
+  // GC 일시정지도 nodejs_gc_duration_seconds 로 이미 온다. 중복 정의하지 않는다.
+};
 
 // pool 의 내부 카운터는 스크레이프 시점에 읽는다.
 // waiting > 0 이면 "요청이 DB 가 아니라 풀 앞에서 줄 서 있다"는 뜻이다.

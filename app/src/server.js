@@ -1,11 +1,17 @@
 import fs from 'node:fs';
+import cluster from 'node:cluster';
+import http from 'node:http';
 import crypto from 'node:crypto';
 import Fastify from 'fastify';
 import { createReservation } from './reservation.js';
 import { closeDb, poolConfig, pool } from './db.js';
 import {
-  registry, httpRequestDuration, httpRequestsInFlight, reservationOutcomes,
+  registry, httpRequestDuration, httpRequestsInFlight, reservationOutcomes, overloadMetrics,
 } from './metrics.js';
+import {
+  burnCpu, allocateGarbage, shouldShed, withTimeout, calibrateCpuBurn,
+  startLoopLagProbe, stopLoopLagProbe, currentLoopLagMs, overloadConfig,
+} from './overload.js';
 
 // Phase 02: 앱이 직접 TLS 를 종료할지 결정한다.
 //   off   -> 평문 HTTP (Phase 01 기준선)
@@ -61,12 +67,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+let inFlight = 0;
+
 app.addHook('onRequest', async (req) => {
   req.startTime = process.hrtime.bigint();
+  inFlight += 1;
   httpRequestsInFlight.inc();
 });
 
 app.addHook('onResponse', async (req, reply) => {
+  inFlight -= 1;
   httpRequestsInFlight.dec();
   const seconds = Number(process.hrtime.bigint() - req.startTime) / 1e9;
   httpRequestDuration.observe(
@@ -100,11 +110,32 @@ app.post('/api/v1/events/:eventId/reservations', async (req, reply) => {
     return reply.code(400).send({ error: 'INVALID_IDEMPOTENCY_KEY' });
   }
 
+  // ── Phase 04 보호 장치: 받을지 말지를 "일을 시작하기 전에" 판단한다 ──────────
+  // 여기가 핵심이다. 이미 DB 트랜잭션을 연 뒤에 거절하면 자원을 쓰고도 실패한 것이 된다.
+  const shed = shouldShed(inFlight);
+  if (shed) {
+    overloadMetrics.shedTotal.inc({ reason: shed.reason });
+    reservationOutcomes.inc({ outcome: 'shed' });
+    return reply
+      .code(503)
+      .header('Retry-After', '1')
+      .send({ error: 'OVERLOADED', reason: shed.reason, detail: shed.detail });
+  }
+
   try {
     // 실험 (d): 이 인스턴스만 느리게 만든다. CPU 를 태우지 않는 순수 지연이다.
     if (SLOW_MS > 0) await sleep(SLOW_MS);
 
-    const result = await createReservation({ eventId, userId, quantity, idempotencyKey });
+    // 실험 (a): CPU 를 태운다. 동기면 이벤트 루프가 이 시간 동안 멈춘다.
+    const burn = burnCpu();
+    if (burn) await burn;
+
+    // 실험 (b): 큰 객체를 만들어 GC 를 압박한다.
+    allocateGarbage();
+
+    const result = await withTimeout(
+      createReservation({ eventId, userId, quantity, idempotencyKey }),
+    );
     reservationOutcomes.inc({ outcome: result.outcome });
 
     switch (result.outcome) {
@@ -129,6 +160,11 @@ app.post('/api/v1/events/:eventId/reservations', async (req, reply) => {
         return reply.code(500).send({ error: 'UNKNOWN_OUTCOME' });
     }
   } catch (err) {
+    if (err.code === 'REQUEST_TIMEOUT') {
+      overloadMetrics.timeoutTotal.inc();
+      reservationOutcomes.inc({ outcome: 'timeout' });
+      return reply.code(504).send({ error: 'TIMEOUT' });
+    }
     reservationOutcomes.inc({ outcome: 'error' });
     // 부하 중 에러 원인을 잃지 않도록 에러만 로그로 남긴다 (정상 경로는 로그 없음).
     process.stderr.write(`reservation_error ${err.code ?? ''} ${err.message}\n`);
@@ -173,6 +209,10 @@ app.get('/debug/info', async (req) => ({
   ready,
   poolMax: poolConfig.max,
   tlsMode,
+  inFlight,
+  loopLagMs: currentLoopLagMs(),
+  overload: overloadConfig,
+  pid: process.pid,
   // req.socket.getCipher() 는 TLS 커넥션에서만 존재한다.
   // 실제로 어떤 버전/암호가 협상됐는지 실행 중에 확인할 수 있어야 한다.
   tls: req.socket.getCipher
@@ -198,10 +238,33 @@ const port = Number(process.env.PORT ?? 3000);
 // 실험 (c): 이걸 좁히고 앱이 바쁘게 만들면 커널이 새 연결을 조용히 버린다(ListenOverflows).
 const backlog = Number(process.env.APP_BACKLOG ?? 511);
 
+// Phase 04: 이벤트 루프 지연을 100ms 주기로 직접 측정 시작.
+// load shedding 판단에 쓰이므로 요청 처리보다 먼저 켜야 한다.
+startLoopLagProbe();
+const burnIters = calibrateCpuBurn();
+
+// 클러스터 모드일 때만: 이 워커 전용 지표 포트를 연다.
+// 포트 3000 은 워커들이 공유하므로 그쪽으로 긁으면 아무 워커나 걸린다.
+let workerMetricsServer = null;
+if (cluster.isWorker) {
+  const wPort = 3010 + cluster.worker.id;
+  workerMetricsServer = http.createServer(async (req, res) => {
+    if (req.url !== '/metrics') { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'Content-Type': registry.contentType });
+    res.end(await registry.metrics());
+  });
+  workerMetricsServer.listen(wPort, '0.0.0.0', () => {
+    process.stdout.write(`worker ${cluster.worker.id} metrics on ${wPort}\n`);
+  });
+}
+
 app.listen({ port, host: '0.0.0.0', backlog })
   .then(() => process.stdout.write(
     `app listening on ${port} scheme=${tlsMode === 'off' ? 'http' : 'https'} `
-    + `tlsMode=${tlsMode} poolMax=${poolConfig.max}\n`,
+    + `tlsMode=${tlsMode} poolMax=${poolConfig.max} pid=${process.pid} `
+    + `cpuBurn=${overloadConfig.cpuBurnMs}ms(${burnIters}iter/ms,${overloadConfig.cpuBurnAsync ? 'async' : 'sync'}) `
+    + `alloc=${overloadConfig.allocKb}KB shed(inflight=${overloadConfig.shedInflight},lag=${overloadConfig.shedLoopLagMs}ms) `
+    + `timeout=${overloadConfig.requestTimeoutMs}ms\n`,
   ))
   .catch((err) => {
     process.stderr.write(`listen_failed ${err.message}\n`);
@@ -232,6 +295,8 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
     process.stdout.write(`shutdown: readiness=false, draining ${DRAIN_WAIT_MS}ms\n`);
     if (DRAIN_WAIT_MS > 0) await sleep(DRAIN_WAIT_MS);
 
+    stopLoopLagProbe();
+    workerMetricsServer?.close();
     await app.close();
     await closeDb();
     process.stdout.write('shutdown: complete\n');

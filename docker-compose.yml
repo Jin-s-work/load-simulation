@@ -13,13 +13,17 @@ x-app-base: &app-base
   sysctls:
     # (c) accept 큐의 커널 상한. Node 는 스레드가 하나라 바쁠 때 accept 가 늦어진다.
     - net.core.somaxconn=${APP_SOMAXCONN:-4096}
+  # Phase 04: 자원 한계를 명확히 못 박는다.
+  # cpus=1.0 -> Node 의 JS 스레드 하나가 쓸 수 있는 최대와 같아 "벽"이 정확해진다.
+  # mem=512m -> OOM 재현이 현실적인 시간 안에 가능해진다.
+  ports: []
   volumes:
     - ./certs:/certs:ro
   depends_on:
     postgres:
       condition: service_healthy
-  cpus: 1.2
-  mem_limit: 512m
+  cpus: ${APP_CPUS:-1.0}
+  mem_limit: ${APP_MEM:-512m}
   restart: unless-stopped
 
 x-app-env: &app-env
@@ -29,6 +33,20 @@ x-app-env: &app-env
   TLS_MIN_VERSION: ${TLS_MIN_VERSION:-TLSv1.2}
   TLS_MAX_VERSION: ${TLS_MAX_VERSION:-TLSv1.3}
   APP_BACKLOG: ${APP_BACKLOG:-511}
+  # ── Phase 04: 부하 주입 ──────────────────────────────────────────────
+  CPU_BURN_MS: ${CPU_BURN_MS:-0}          # 요청당 동기 CPU 연산 (ms)
+  CPU_BURN_ASYNC: ${CPU_BURN_ASYNC:-0}    # 1 이면 스레드풀에서 (루프를 막지 않음)
+  ALLOC_KB: ${ALLOC_KB:-0}                # 요청당 할당할 객체 크기 (KB)
+  ALLOC_HOLD: ${ALLOC_HOLD:-200}          # 붙잡아 둘 객체 개수
+  # ── Phase 04: 보호 장치 ──────────────────────────────────────────────
+  MAX_CONCURRENT: ${MAX_CONCURRENT:-0}        # bulkhead
+  SHED_INFLIGHT: ${SHED_INFLIGHT:-0}          # 큐 길이 기반 load shedding
+  SHED_LOOP_LAG_MS: ${SHED_LOOP_LAG_MS:-0}    # 루프 지연 기반 load shedding
+  REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-0}
+  # ── Phase 04: 동시성 ─────────────────────────────────────────────────
+  CLUSTER_WORKERS: ${CLUSTER_WORKERS:-1}
+  METRICS_PORT: 3001
+  UV_THREADPOOL_SIZE: ${UV_THREADPOOL_SIZE:-4}
 
 services:
   postgres:
@@ -63,6 +81,13 @@ services:
   app1:
     <<: *app-base
     container_name: lts-app1
+    ports:
+      - "3000:3000"     # Phase 04: LB 를 거치지 않고 직접 재기 위해 노출
+      # 클러스터 워커별 지표 포트 (3011~3014). 워커가 적으면 남는 포트는 안 열린다.
+      - "3011:3011"
+      - "3012:3012"
+      - "3013:3013"
+      - "3014:3014"
     environment:
       <<: *app-env
       INSTANCE_ID: app1
