@@ -47,6 +47,21 @@ x-app-env: &app-env
   CLUSTER_WORKERS: ${CLUSTER_WORKERS:-1}
   METRICS_PORT: 3001
   UV_THREADPOOL_SIZE: ${UV_THREADPOOL_SIZE:-4}
+  # ── Phase 05: 커넥션 풀 ──────────────────────────────────────────────
+  # ★ 앱 인스턴스 하나 기준이다. DB 가 받는 건 (앱 대수 × PG_POOL_MAX).
+  #   앱 3대 × 40 = 120 이면 Postgres 기본 max_connections=100 을 넘긴다.
+  PG_POOL_MAX: ${PG_POOL_MAX:-10}
+  PG_ACQUIRE_TIMEOUT_MS: ${PG_ACQUIRE_TIMEOUT_MS:-0}   # 0 = 무한 대기
+  PG_IDLE_TIMEOUT_MS: ${PG_IDLE_TIMEOUT_MS:-10000}
+  PG_MAX_LIFETIME_SEC: ${PG_MAX_LIFETIME_SEC:-0}       # 0 = 무제한
+  # ── Phase 05: 서버측 타임아웃 (Postgres 기본값은 셋 다 0=무제한) ────
+  PG_STATEMENT_TIMEOUT_MS: ${PG_STATEMENT_TIMEOUT_MS:-0}
+  PG_LOCK_TIMEOUT_MS: ${PG_LOCK_TIMEOUT_MS:-0}
+  PG_IDLE_TX_TIMEOUT_MS: ${PG_IDLE_TX_TIMEOUT_MS:-0}
+  # ── Phase 05: DB 부하 주입 / 개선 경로 ───────────────────────────────
+  TX_HOLD_MS: ${TX_HOLD_MS:-0}          # (e) 락을 쥔 채 머무는 시간
+  SLOW_QUERY: ${SLOW_QUERY:-0}          # (f) 인덱스 없는 조회를 트랜잭션에 추가
+  TX_OPTIMIZED: ${TX_OPTIMIZED:-0}      # 개선: 트랜잭션 왕복 5회 -> 2회
 
 services:
   postgres:

@@ -42,9 +42,27 @@ export const dbPoolAcquireWait = new client.Histogram({
   registers: [registry],
 });
 
+// Phase 05: 커넥션 획득이 "실패"한 횟수. 대기시간만 재면 (a) 가 안 보인다.
+// max_connections 초과는 대기가 아니라 즉시 거부라서 히스토그램에 거의 안 잡힌다.
+export const dbPoolAcquireError = new client.Counter({
+  name: 'db_pool_acquire_error_total',
+  help: '커넥션 획득 실패 수',
+  labelNames: ['reason'],  // too_many_clients | pool_acquire_timeout | statement_timeout | lock_timeout | ...
+  registers: [registry],
+});
+
 export const dbTransactionDuration = new client.Histogram({
   name: 'db_transaction_duration_seconds',
   help: 'BEGIN~COMMIT 구간 소요 시간 (= 커넥션 점유 시간)',
+  buckets: LATENCY_BUCKETS,
+  registers: [registry],
+});
+
+// Phase 05 (f): 인덱스 없는 조회에 걸린 시간.
+// 트랜잭션 전체 시간과 따로 재야 "느린 쿼리가 점유 시간의 몇 %인지" 를 말할 수 있다.
+export const dbSlowQueryDuration = new client.Histogram({
+  name: 'db_slow_query_duration_seconds',
+  help: '인덱스 없는 조회 소요 시간 (Phase 05 (f))',
   buckets: LATENCY_BUCKETS,
   registers: [registry],
 });

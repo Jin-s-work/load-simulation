@@ -4,7 +4,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import Fastify from 'fastify';
 import { createReservation } from './reservation.js';
-import { closeDb, poolConfig, pool } from './db.js';
+import { closeDb, poolConfig, pool, classifyDbError } from './db.js';
 import {
   registry, httpRequestDuration, httpRequestsInFlight, reservationOutcomes, overloadMetrics,
 } from './metrics.js';
@@ -165,9 +165,23 @@ app.post('/api/v1/events/:eventId/reservations', async (req, reply) => {
       reservationOutcomes.inc({ outcome: 'timeout' });
       return reply.code(504).send({ error: 'TIMEOUT' });
     }
-    reservationOutcomes.inc({ outcome: 'error' });
-    // 부하 중 에러 원인을 잃지 않도록 에러만 로그로 남긴다 (정상 경로는 로그 없음).
-    process.stderr.write(`reservation_error ${err.code ?? ''} ${err.message}\n`);
+    // Phase 05: DB 쪽 실패는 원인별로 나눈다.
+    // 전부 500 으로 뭉뚱그리면 k6 출력만 보고 "커넥션이 없었나 / 쿼리가 느렸나 /
+    // 락을 못 잡았나" 를 구분할 수 없다. 이 구분이 이번 Phase 의 핵심 증거다.
+    const reason = classifyDbError(err);
+    reservationOutcomes.inc({ outcome: `error_${reason}` });
+    process.stderr.write(`reservation_error ${reason} ${err.code ?? ''} ${err.message}\n`);
+
+    // 커넥션을 못 얻었거나 서버측 타임아웃에 걸린 것은 "일시적 과부하" 다.
+    // 클라이언트가 재시도를 판단할 수 있도록 503 + Retry-After 로 답한다.
+    const transient = [
+      'too_many_clients', 'pool_acquire_timeout',
+      'statement_timeout', 'lock_timeout', 'idle_in_tx_timeout', 'deadlock',
+    ].includes(reason);
+    if (transient) {
+      return reply.code(503).header('Retry-After', '1')
+        .send({ error: 'DB_UNAVAILABLE', reason });
+    }
     return reply.code(500).send({ error: 'INTERNAL', code: err.code ?? null });
   }
 });

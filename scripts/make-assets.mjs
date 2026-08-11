@@ -42,10 +42,10 @@ const THEMES = {
 // ── 헤더에 세울 숫자 ────────────────────────────────────────────────
 // 전부 실측값이다. 추측한 숫자를 여기 넣지 않는다.
 const STATS = [
-  { value: '4 / 9', label: '완료한 Phase' },
+  { value: '5 / 9', label: '완료한 Phase' },
   { value: '2,000', label: 'RPS 천장 (Phase 01)' },
   { value: '7.4×', label: 'p99 개선 (Phase 03)' },
-  { value: '44×', label: 'p50 개선 (Phase 04)' },
+  { value: '7.9×', label: '처리량 개선 (Phase 05)' },
 ];
 
 const PHASES = [
@@ -53,7 +53,7 @@ const PHASES = [
   { no: '02', name: 'TLS', done: true },
   { no: '03', name: '로드밸런서', done: true },
   { no: '04', name: '앱서버', done: true },
-  { no: '05', name: '커넥션 풀', done: false },
+  { no: '05', name: '커넥션 풀', done: true },
   { no: '06', name: 'DB 프록시', done: false },
   { no: '07', name: '캐시', done: false },
   { no: '08', name: 'MQ', done: false },
@@ -132,8 +132,14 @@ function roadmap(t) {
           letter-spacing="0.2" fill="${nameColor}" text-anchor="middle">${esc(p.name)}</text>`;
   }).join('');
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Phase 로드맵: 01 기준선부터 04 앱서버까지 완료, 05 커넥션 풀부터 09 클라우드까지 예정">
-  <title>Phase 로드맵 — 9단계 중 4단계 완료</title>
+  // 대체 텍스트는 PHASES 에서 파생시킨다. 손으로 적으면 반드시 낡는다.
+  const done = PHASES.filter((p) => p.done);
+  const todo = PHASES.filter((p) => !p.done);
+  const label = `Phase 로드맵: ${done.map((p) => `${p.no} ${p.name}`).join(', ')} 완료`
+    + `${todo.length ? ` / ${todo.map((p) => `${p.no} ${p.name}`).join(', ')} 예정` : ''}`;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(label)}">
+  <title>Phase 로드맵 — ${n}단계 중 ${done.length}단계 완료</title>
 ${segs}
 </svg>
 `;

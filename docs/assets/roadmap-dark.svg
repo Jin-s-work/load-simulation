@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 96" width="1200" height="96" role="img" aria-label="Phase 로드맵: 01 기준선부터 04 앱서버까지 완료, 05 커넥션 풀부터 09 클라우드까지 예정">
-  <title>Phase 로드맵 — 9단계 중 4단계 완료</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 96" width="1200" height="96" role="img" aria-label="Phase 로드맵: 01 기준선, 02 TLS, 03 로드밸런서, 04 앱서버, 05 커넥션 풀 완료 / 06 DB 프록시, 07 캐시, 08 MQ, 09 클라우드 예정">
+  <title>Phase 로드맵 — 9단계 중 5단계 완료</title>
 
     <rect x="20" y="18" width="120" height="7" rx="3.5" fill="#0a84ff"/>
     <text x="80" y="52" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace" font-size="13" font-weight="600"
@@ -21,11 +21,11 @@
           letter-spacing="0.3" fill="#f5f5f7" text-anchor="middle">04</text>
     <text x="470" y="72" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif" font-size="11.5" font-weight="400"
           letter-spacing="0.2" fill="#a1a1a6" text-anchor="middle">앱서버</text>
-    <rect x="540" y="18" width="120" height="7" rx="3.5" fill="#2c2c2e"/>
+    <rect x="540" y="18" width="120" height="7" rx="3.5" fill="#0a84ff"/>
     <text x="600" y="52" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace" font-size="13" font-weight="600"
-          letter-spacing="0.3" fill="#86868b" text-anchor="middle">05</text>
+          letter-spacing="0.3" fill="#f5f5f7" text-anchor="middle">05</text>
     <text x="600" y="72" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif" font-size="11.5" font-weight="400"
-          letter-spacing="0.2" fill="#86868b" text-anchor="middle">커넥션 풀</text>
+          letter-spacing="0.2" fill="#a1a1a6" text-anchor="middle">커넥션 풀</text>
     <rect x="670" y="18" width="120" height="7" rx="3.5" fill="#2c2c2e"/>
     <text x="730" y="52" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace" font-size="13" font-weight="600"
           letter-spacing="0.3" fill="#86868b" text-anchor="middle">06</text>

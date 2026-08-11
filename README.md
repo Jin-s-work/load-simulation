@@ -7,7 +7,7 @@
 
 <br>
 
-![Phase](https://img.shields.io/badge/phase-04%20%2F%2009-0071e3?style=flat-square&labelColor=1d1d1f)
+![Phase](https://img.shields.io/badge/phase-05%20%2F%2009-0071e3?style=flat-square&labelColor=1d1d1f)
 ![Node](https://img.shields.io/badge/Node-24-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white&labelColor=1d1d1f)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat-square&logo=postgresql&logoColor=white&labelColor=1d1d1f)
 ![k6](https://img.shields.io/badge/k6-0.56-7D64FF?style=flat-square&logo=k6&logoColor=white&labelColor=1d1d1f)
@@ -127,12 +127,12 @@ colima 환경에서 컨테이너 이름 라벨이 안 붙었고, 대량 시계�
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/roadmap-dark.svg">
-  <img alt="Phase 로드맵 — 9단계 중 4단계 완료" src="docs/assets/roadmap-light.svg" width="100%">
+  <img alt="Phase 로드맵 — 9단계 중 5단계 완료" src="docs/assets/roadmap-light.svg" width="100%">
 </picture>
 
 </div>
 
-### 핵심 발견 넷
+### 핵심 발견 다섯
 
 > **처리량은 CPU가 정한다.** 요청당 CPU를 10ms 넣으면 100.20 RPS, 30ms 넣으면 34.30 RPS가 나옵니다. 이론값 `1000/X` 와 오차 3% 안에서 일치했습니다.
 
@@ -142,6 +142,8 @@ colima 환경에서 컨테이너 이름 라벨이 안 붙었고, 대량 시계�
 
 > **타임아웃만으로는 최악이다.** 실패율 99.8%. 응답은 포기해도 서버는 그 요청의 CPU 연산을 계속 돌립니다. 자원을 다 쓰고도 전부 실패했습니다.
 
+> **"풀이 마른다"는 증상이지 원인이 아니다.** 200만 행 순차 스캔 하나가 커넥션 30개를 전부 묶어 실패율 85.8%를 만들었는데, 풀은 손대지 않고 **인덱스 하나만 추가하니** 처리량 31.8 → 252.2 RPS, 실패율 0%가 됐습니다.
+
 ### Phase 별 결과
 
 | # | 주제 | 무엇을 터뜨렸나 | 결과 | 기록 |
@@ -150,7 +152,7 @@ colima 환경에서 컨테이너 이름 라벨이 안 붙었고, 대량 시계�
 | **02** | TLS 핸드쉐이크 | 세션 재사용을 강제로 끔 | 천장 **절반**으로 하락 · 프록시 오프로딩으로 회복 | [📄](docs/labs/02-tls.md) |
 | **03** | 로드밸런서 | 알고리즘 교체 · 헬스체크 제거 | least-conn이 p99 **7.4배** 개선 · drain 유무가 p99 **45배** | [📄](docs/labs/03-loadbalancer.md) |
 | **04** | 앱서버 한계 | CPU/메모리를 직접 태움 (`cpus=1.0`) | 요청당 CPU가 천장 결정 · shedding이 p50 **44배** 단축 | [📄](docs/labs/04-app-server.md) |
-| 05 | 커넥션 풀 | — | 예정 | |
+| **05** | 커넥션 풀 | 풀 크기를 양극단으로 + 락 경합 + 느린 쿼리 | 커넥션당 **3.1MB** 선형 · 인덱스 하나가 처리량 **7.9배** | [📄](docs/labs/05-db-pool.md) |
 | 06 | DB 프록시 | — | 예정 | |
 | 07 | 캐시 | — | 예정 | |
 | 08 | 메시지 큐 | — | 예정 | |
