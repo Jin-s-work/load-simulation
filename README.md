@@ -28,10 +28,14 @@ k6 → 로드밸런서 → 앱서버 → DB 구조를 로컬 Docker Compose 위�
 
 그래서 규칙이 좀 빡빡합니다.
 
-> **① 한 번에 한 계층만 건드린다** — 두 계층을 같이 바꾸면 원인 귀속이 불가능해집니다
-> **② 가설은 실험 전에 쓰고, 틀려도 고쳐 쓰지 않는다** — 틀린 가설이 남아야 학습 기록입니다
-> **③ 성능 수치는 추측하지 않는다** — "보통 이 정도 나온다" 금지. 실제 k6 출력만 근거로 씁니다
-> **④ 부하 생성기가 병목이 아님을 매번 확인한다** — 로컬 부하테스트에서 가장 흔한 거짓 결론이 "서버가 한계"가 아니라 "내 노트북이 한계"입니다
+1. **한 번에 한 계층만 건드린다**
+   두 계층을 같이 바꾸면 원인 귀속이 불가능해집니다.
+2. **가설은 실험 전에 쓰고, 틀려도 고쳐 쓰지 않는다**
+   틀린 가설이 남아야 학습 기록입니다.
+3. **성능 수치는 추측하지 않는다**
+   "보통 이 정도 나온다" 금지. 실제 k6 출력만 근거로 씁니다.
+4. **부하 생성기가 병목이 아님을 매번 확인한다**
+   로컬 부하테스트에서 가장 흔한 거짓 결론이 "서버가 한계"가 아니라 "내 노트북이 한계"입니다.
 
 ---
 
@@ -61,27 +65,31 @@ POST /api/v1/events/{eventId}/reservations
 
 ```mermaid
 flowchart LR
-    k6["k6<br/><small>부하 생성기</small>"]:::gen
-    HA["HAProxy 3.0<br/><small>least-conn</small>"]:::lb
+    k6["k6 부하 생성기"]:::gen
+    HA["HAProxy 3.0<br/>least-conn"]:::lb
     A1["app1"]:::app
     A2["app2"]:::app
     A3["app3"]:::app
-    PG[("PostgreSQL 16<br/><small>max_conn 100</small>")]:::db
+    PG[("PostgreSQL 16<br/>max_connections 100")]:::db
     PR["Prometheus"]:::obs
     GF["Grafana"]:::obs
 
     k6 --> HA
-    HA --> A1 & A2 & A3
-    A1 & A2 & A3 --> PG
-    A1 & A2 & A3 -.->|metrics| PR
-    PG -.->|exporter| PR
+    HA --> A1
+    HA --> A2
+    HA --> A3
+    A1 --> PG
+    A2 --> PG
+    A3 --> PG
+    A2 -.-> PR
+    PG -.-> PR
     PR --> GF
 
-    classDef gen fill:#7D64FF,stroke:none,color:#fff
-    classDef lb fill:#106DA9,stroke:none,color:#fff
-    classDef app fill:#5FA04E,stroke:none,color:#fff
-    classDef db fill:#4169E1,stroke:none,color:#fff
-    classDef obs fill:#E6522C,stroke:none,color:#fff
+    classDef gen fill:#7D64FF,color:#ffffff,stroke-width:0px
+    classDef lb fill:#106DA9,color:#ffffff,stroke-width:0px
+    classDef app fill:#5FA04E,color:#ffffff,stroke-width:0px
+    classDef db fill:#4169E1,color:#ffffff,stroke-width:0px
+    classDef obs fill:#E6522C,color:#ffffff,stroke-width:0px
 ```
 
 | 계층 | 선택 | 비고 |
