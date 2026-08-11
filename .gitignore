@@ -6,3 +6,7 @@ results/*.json
 results/*.csv
 results/*.md
 results/*.events.log
+
+# TLS 실험용 자체 서명 인증서.
+# 공개 저장소에 비밀키를 올리지 않는다. scripts/gen-certs.sh 로 각자 생성한다.
+certs/*.pem
