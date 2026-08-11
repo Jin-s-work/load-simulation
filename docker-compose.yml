@@ -28,7 +28,11 @@ x-app-base: &app-base
 
 x-app-env: &app-env
   PORT: 3000
-  DATABASE_URL: postgres://lts:lts@postgres:5432/lts
+  # Phase 06: 앱이 DB 에 직접 붙을지, PgBouncer 를 거칠지를 여기서 가른다.
+  #   직결   DB_HOST=postgres  DB_PORT=5432
+  #   프록시 DB_HOST=pgbouncer DB_PORT=6432
+  # 앱 코드는 아무것도 모른다 — 커넥션 문자열만 바뀐다. 그게 프록시의 장점이다.
+  DATABASE_URL: postgres://lts:lts@${DB_HOST:-postgres}:${DB_PORT:-5432}/lts
   TLS_MODE: ${TLS_MODE:-off}
   TLS_MIN_VERSION: ${TLS_MIN_VERSION:-TLSv1.2}
   TLS_MAX_VERSION: ${TLS_MAX_VERSION:-TLSv1.3}
@@ -126,6 +130,90 @@ services:
       INSTANCE_ID: app3
       SLOW_MS: ${APP3_SLOW_MS:-0}
       DRAIN_WAIT_MS: ${APP3_DRAIN_WAIT_MS:-0}
+
+  # ---------------------------------------------------------------------------
+  # Phase 06: 앱 4~6호기.
+  #
+  # profiles 를 붙여 기본 구성에서는 뜨지 않게 한다. `--profile six` 를 줄 때만 뜬다.
+  # 이렇게 하지 않으면 Phase 01~05 를 재현할 때 앱이 6대 뜨면서 커넥션 수가 달라진다.
+  #
+  # HAProxy 는 6대를 상시 정의한다. 안 뜬 인스턴스는 헬스체크로 DOWN 처리되어
+  # 트래픽을 받지 않는다 — LB 입장에서는 "죽은 서버"와 구분할 필요가 없다.
+  # ---------------------------------------------------------------------------
+  app4:
+    <<: *app-base
+    container_name: lts-app4
+    profiles: ["six"]
+    environment:
+      <<: *app-env
+      INSTANCE_ID: app4
+
+  app5:
+    <<: *app-base
+    container_name: lts-app5
+    profiles: ["six"]
+    environment:
+      <<: *app-env
+      INSTANCE_ID: app5
+
+  app6:
+    <<: *app-base
+    container_name: lts-app6
+    profiles: ["six"]
+    environment:
+      <<: *app-env
+      INSTANCE_ID: app6
+
+  # ---------------------------------------------------------------------------
+  # Phase 06 의 주인공. 앱과 DB 사이의 커넥션 풀러.
+  #
+  # 하는 일은 하나다 — 앱이 여는 많은 커넥션을 DB 쪽 적은 커넥션으로 접는다.
+  #   앱 6대 × 풀 10 = 60 개를 받아서  ->  DB 에는 DEFAULT_POOL_SIZE 만큼만 연다.
+  #
+  # ★ PgBouncer 는 단일 스레드다. Phase 01(앱 단일 스레드), Phase 04(CPU 1개)와
+  #   같은 교훈이 세 번째 계층에서 반복된다. cpus 를 낮추면 여기가 병목이 된다.
+  # ---------------------------------------------------------------------------
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p2
+    container_name: lts-pgbouncer
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: lts
+      DB_PASSWORD: lts
+      DB_NAME: lts
+      # 이 이미지의 기본 listen_port 는 5432 다. 그대로 두면 "postgres 에 붙었는지
+      # pgbouncer 에 붙었는지" 를 포트로 구분할 수 없어 디버깅이 어려워진다.
+      # PgBouncer 관례 포트인 6432 로 명시한다.
+      LISTEN_PORT: 6432
+      # session | transaction | statement
+      #   session     : 클라이언트 연결이 끊길 때까지 서버 커넥션을 붙잡는다 (접힘 거의 없음)
+      #   transaction : COMMIT/ROLLBACK 때 반납한다 (실무 표준)
+      #   statement   : 쿼리마다 반납. 멀티문 트랜잭션 자체가 불가 -> 우리 라우트는 못 쓴다
+      POOL_MODE: ${PGB_POOL_MODE:-transaction}
+      # DB 쪽으로 실제로 여는 커넥션 수. 이 값이 "접힘 비율"을 정한다.
+      DEFAULT_POOL_SIZE: ${PGB_DEFAULT_POOL_SIZE:-20}
+      # 앱에서 받아줄 커넥션 수. 이게 작으면 PgBouncer 가 먼저 거절한다.
+      MAX_CLIENT_CONN: ${PGB_MAX_CLIENT_CONN:-1000}
+      # 풀이 꽉 찼을 때 추가로 열 수 있는 여유분. 0 이면 엄격히 DEFAULT_POOL_SIZE 만.
+      RESERVE_POOL_SIZE: ${PGB_RESERVE_POOL_SIZE:-0}
+      AUTH_TYPE: scram-sha-256
+      # 관리 콘솔(SHOW POOLS)에 붙을 수 있어야 계측이 된다.
+      ADMIN_USERS: lts
+      STATS_USERS: lts
+    ports:
+      - "6432:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=lts psql -h 127.0.0.1 -p 6432 -U lts -d pgbouncer -tAc 'SHOW VERSION' || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    cpus: ${PGB_CPUS:-1.0}
+    mem_limit: 256m
+    restart: unless-stopped
 
   # ---------------------------------------------------------------------------
   # Phase 03 의 주인공. L7 로드밸런서.

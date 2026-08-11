@@ -42,9 +42,9 @@ const THEMES = {
 // ── 헤더에 세울 숫자 ────────────────────────────────────────────────
 // 전부 실측값이다. 추측한 숫자를 여기 넣지 않는다.
 const STATS = [
-  { value: '5 / 9', label: '완료한 Phase' },
+  { value: '6 / 9', label: '완료한 Phase' },
   { value: '2,000', label: 'RPS 천장 (Phase 01)' },
-  { value: '7.4×', label: 'p99 개선 (Phase 03)' },
+  { value: '53%', label: 'DB 메모리 절감 (Phase 06)' },
   { value: '7.9×', label: '처리량 개선 (Phase 05)' },
 ];
 
@@ -54,7 +54,7 @@ const PHASES = [
   { no: '03', name: '로드밸런서', done: true },
   { no: '04', name: '앱서버', done: true },
   { no: '05', name: '커넥션 풀', done: true },
-  { no: '06', name: 'DB 프록시', done: false },
+  { no: '06', name: 'DB 프록시', done: true },
   { no: '07', name: '캐시', done: false },
   { no: '08', name: 'MQ', done: false },
   { no: '09', name: '클라우드', done: false },

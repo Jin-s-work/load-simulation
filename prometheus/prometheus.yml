@@ -5,11 +5,19 @@ global:
 scrape_configs:
   # 앱 3대. Prometheus 가 붙여주는 instance 라벨로 인스턴스별 분배를 확인한다.
   # 1초 해상도로 긁는다. 헬스체크 감지 구간이 몇 초 단위라 5초로는 놓친다.
+  # Phase 06 부터 6대까지 늘어난다. 안 뜬 인스턴스는 down 이 된다(정상).
+  # 질의는 sum() 으로 합치므로 down 타깃이 있어도 결과가 틀어지지 않는다.
   - job_name: app
     scrape_interval: 1s
     scrape_timeout: 900ms
     static_configs:
-      - targets: ["app1:3000", "app2:3000", "app3:3000"]
+      - targets:
+          - "app1:3000"
+          - "app2:3000"
+          - "app3:3000"
+          - "app4:3000"
+          - "app5:3000"
+          - "app6:3000"
 
   # 클러스터 모드에서는 워커마다 3011+ 포트로 자기 지표를 낸다.
   # 워커 수보다 많은 타깃은 down 이 된다(정상). 질의는 sum() 으로 합친다.

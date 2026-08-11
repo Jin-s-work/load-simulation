@@ -16,10 +16,15 @@ const NO_REUSE = __ENV.NO_REUSE === '1';
 const LABEL = __ENV.LABEL || 'lb-test';
 
 // 인스턴스별 처리 건수. LB 알고리즘의 효과가 여기서 그대로 드러난다.
+// Phase 06 에서 앱이 6대까지 늘어난다. 3대까지만 세면 app4~6 이 전부
+// unknown 으로 잡혀 "미상 100%" 라는 잘못된 그림이 나온다.
 const served = {
   app1: new Counter('served_app1'),
   app2: new Counter('served_app2'),
   app3: new Counter('served_app3'),
+  app4: new Counter('served_app4'),
+  app5: new Counter('served_app5'),
+  app6: new Counter('served_app6'),
   unknown: new Counter('served_unknown'),
 };
 
@@ -88,16 +93,17 @@ export function handleSummary(data) {
   const m = data.metrics;
   const c = (n) => (m[n] ? m[n].values.count : 0);
 
-  const s1 = c('served_app1'); const s2 = c('served_app2');
-  const s3 = c('served_app3'); const su = c('served_unknown');
-  const stot = s1 + s2 + s3 + su || 1;
+  const inst = [1, 2, 3, 4, 5, 6].map((i) => c(`served_app${i}`));
+  const su = c('served_unknown');
+  const stot = inst.reduce((a, b) => a + b, 0) + su || 1;
   const pct = (v) => `${((v / stot) * 100).toFixed(1)}%`;
 
   const extra = [
     '인스턴스별 분배:',
-    `  app1 ${String(s1).padStart(7)}  (${pct(s1)})`,
-    `  app2 ${String(s2).padStart(7)}  (${pct(s2)})`,
-    `  app3 ${String(s3).padStart(7)}  (${pct(s3)})`,
+    // 안 뜬 인스턴스(0건)는 출력하지 않는다. 3대 구성에서 app4~6 이 0 으로
+    // 줄줄이 나오면 표가 지저분해지고 "죽은 서버"처럼 오해된다.
+    ...inst.map((v, i) => (v > 0 ? `  app${i + 1} ${String(v).padStart(7)}  (${pct(v)})` : ''))
+      .filter(Boolean),
     su ? `  미상 ${String(su).padStart(7)}  (${pct(su)})  <- 헤더 없음 = LB 가 응답을 못 만든 요청` : '',
     '',
     '에러 분해:',
@@ -117,7 +123,7 @@ export function handleSummary(data) {
       {
         label: LABEL,
         schedule: [{ rate: RATE, holdStart: WARMUP_SEC + GAP_SEC, holdEnd: WARMUP_SEC + GAP_SEC + parseInt(DURATION, 10) }],
-        served: { app1: s1, app2: s2, app3: s3, unknown: su },
+        served: Object.fromEntries([...inst.map((v, i) => [`app${i + 1}`, v]), ['unknown', su]]),
         metrics: data.metrics,
       },
       null,
