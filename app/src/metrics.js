@@ -67,6 +67,48 @@ export const dbSlowQueryDuration = new client.Histogram({
   registers: [registry],
 });
 
+// ---------------------------------------------------------------------------
+// Phase 07: 캐시 지표
+// ---------------------------------------------------------------------------
+export const cacheLookups = new client.Counter({
+  name: 'cache_lookups_total',
+  help: '캐시 조회 수 (계층별 hit/miss)',
+  labelNames: ['layer', 'result'],   // local|redis × hit|miss
+  registers: [registry],
+});
+
+// kind=db      실제로 DB 를 친 로딩
+// kind=shared  singleflight 로 남의 로딩에 올라탄 요청
+// 둘의 비율이 곧 singleflight 의 효과다.
+export const cacheLoads = new client.Counter({
+  name: 'cache_loads_total',
+  help: '캐시 미스 후 원본 로딩',
+  labelNames: ['kind'],
+  registers: [registry],
+});
+
+export const cacheErrors = new client.Counter({
+  name: 'cache_errors_total',
+  help: '캐시 계층 오류 (요청은 죽이지 않고 miss 로 강등한다)',
+  labelNames: ['op'],
+  registers: [registry],
+});
+
+export const redisOpDuration = new client.Histogram({
+  name: 'redis_op_duration_seconds',
+  help: 'Redis GET 소요 시간',
+  buckets: [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1],
+  registers: [registry],
+});
+
+// DB 를 실제로 친 예약 요청 수. 캐시의 존재 이유가 이 숫자를 줄이는 것이다.
+export const dbTouchTotal = new client.Counter({
+  name: 'db_touch_total',
+  help: '예약 처리 중 DB 를 실제로 친 횟수',
+  labelNames: ['path'],   // write | read_miss | short_circuit(=DB 안 침)
+  registers: [registry],
+});
+
 export const reservationOutcomes = new client.Counter({
   name: 'reservation_outcomes_total',
   help: '예약 라우트의 결과 분포',

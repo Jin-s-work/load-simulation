@@ -72,6 +72,12 @@ pool.on('error', (err) => {
 export function classifyDbError(err) {
   const code = err?.code;
   const msg = String(err?.message || '');
+  // Phase 06 에서 발견한 오분류를 고친다.
+  // PgBouncer 가 죽자 DNS 가 안 풀려 ENOTFOUND 가 났는데, 이 목록에 없어서
+  // 500(영구 오류)으로 응답했다. 34,578건이 그렇게 나갔다.
+  // 실제로는 재시도 가능한 일시적 장애다 — 프록시/DB 가 돌아오면 정상화된다.
+  if (code === 'ENOTFOUND' || code === 'ECONNREFUSED' || code === 'ECONNRESET'
+      || code === 'EHOSTUNREACH' || code === 'ETIMEDOUT') return 'upstream_unreachable';
   if (code === '53300' || /too many clients/i.test(msg)) return 'too_many_clients';
   if (code === '57014' || /statement timeout/i.test(msg)) return 'statement_timeout';
   if (code === '55P03' || /lock timeout/i.test(msg)) return 'lock_timeout';

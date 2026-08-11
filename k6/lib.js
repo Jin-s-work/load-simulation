@@ -35,7 +35,45 @@ export function nextIdempotencyKey() {
   ].join('-');
 }
 
+// Phase 07: 트래픽 패턴을 고른다.
+//   uniform  1..EVENT_COUNT 균등. 캐시 히트율이 가장 낮게 나오는 조건
+//   hot      HOT_RATIO 만큼 한 키에 몰림 (Phase 01~06 이 쓰던 방식)
+//   zipf     현실적인 편중. 상위 소수가 대부분의 트래픽을 가져간다
+export const KEY_DIST = __ENV.KEY_DIST || (HOT_RATIO > 0 ? 'hot' : 'uniform');
+export const ZIPF_S = Number(__ENV.ZIPF_S || 1.1);   // 클수록 편중이 심하다
+
+/**
+ * Zipf 분포 샘플러.
+ *
+ * P(k) ∝ 1/k^s 이다. 매 요청마다 1000개 확률을 계산하면 느리므로,
+ * 누적분포(CDF)를 기동 시 한 번만 만들어 두고 이진 탐색으로 뽑는다.
+ * (k6 는 VU 마다 독립 런타임이라 이 테이블이 VU 수만큼 생기지만,
+ *  1000개 실수 배열이라 무시할 만하다.)
+ */
+const zipfCdf = (() => {
+  if (KEY_DIST !== 'zipf') return null;
+  const w = new Array(EVENT_COUNT);
+  let sum = 0;
+  for (let i = 0; i < EVENT_COUNT; i += 1) {
+    sum += 1 / ((i + 1) ** ZIPF_S);
+    w[i] = sum;
+  }
+  for (let i = 0; i < EVENT_COUNT; i += 1) w[i] /= sum;  // 정규화
+  return w;
+})();
+
+function pickZipf() {
+  const r = Math.random();
+  let lo = 0; let hi = EVENT_COUNT - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (zipfCdf[mid] < r) lo = mid + 1; else hi = mid;
+  }
+  return lo + 1;   // 이벤트 id 는 1부터
+}
+
 export function pickEventId() {
+  if (KEY_DIST === 'zipf') return pickZipf();
   if (HOT_RATIO > 0 && Math.random() < HOT_RATIO) return HOT_EVENT_ID;
   return 1 + Math.floor(Math.random() * EVENT_COUNT);
 }
@@ -73,6 +111,12 @@ export function reservationRequest() {
         'Content-Type': 'application/json',
         'Idempotency-Key': nextIdempotencyKey(),
       },
+      // ★ name 태그를 고정한다.
+      //   이걸 안 주면 k6 는 **URL 전체를 name 라벨로 쓴다.** 이벤트가 1000개라
+      //   지표 하나당 시계열이 1000개씩 생기고, remote-write 로 Prometheus 에 밀려간다.
+      //   Phase 07 에서 실제로 이것 때문에 Prometheus 가 OOM 으로 죽었다(exit 137).
+      //   Phase 02 에서 cAdvisor 가 같은 이유로 Prometheus 를 죽인 것과 같은 종류의 사고다.
+      tags: { name: 'reservation' },
     },
   };
 }

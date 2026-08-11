@@ -66,6 +66,12 @@ x-app-env: &app-env
   TX_HOLD_MS: ${TX_HOLD_MS:-0}          # (e) 락을 쥔 채 머무는 시간
   SLOW_QUERY: ${SLOW_QUERY:-0}          # (f) 인덱스 없는 조회를 트랜잭션에 추가
   TX_OPTIMIZED: ${TX_OPTIMIZED:-0}      # 개선: 트랜잭션 왕복 5회 -> 2회
+  # ── Phase 07: 캐시 ──────────────────────────────────────────────────
+  CACHE_MODE: ${CACHE_MODE:-off}             # off | local | redis | tiered
+  CACHE_TTL_MS: ${CACHE_TTL_MS:-3000}
+  CACHE_TTL_JITTER: ${CACHE_TTL_JITTER:-0}   # 0 = 지터 없음 = stampede 조건
+  SINGLEFLIGHT: ${SINGLEFLIGHT:-0}
+  REDIS_URL: redis://redis:6379
 
 services:
   postgres:
@@ -173,6 +179,34 @@ services:
   # ★ PgBouncer 는 단일 스레드다. Phase 01(앱 단일 스레드), Phase 04(CPU 1개)와
   #   같은 교훈이 세 번째 계층에서 반복된다. cpus 를 낮추면 여기가 병목이 된다.
   # ---------------------------------------------------------------------------
+  # Phase 07: 공유 캐시.
+  #
+  # 로컬 캐시와의 결정적 차이는 **앱 N대일 때의 miss 횟수**다.
+  # 로컬은 같은 키에 N번 miss 하지만 Redis 는 한 번이다.
+  #
+  # maxmemory 를 걸어 두 이유: 상한이 없으면 컨테이너 mem_limit 에 먼저 부딪혀
+  # OOM kill 이 난다. Redis 가 스스로 축출하게 두는 편이 관찰 가능하다.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7.4-alpine
+    container_name: lts-redis
+    command: >
+      redis-server
+      --maxmemory ${REDIS_MAXMEMORY:-128mb}
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    cpus: ${REDIS_CPUS:-0.5}
+    mem_limit: 256m
+    restart: unless-stopped
+
   pgbouncer:
     image: edoburu/pgbouncer:v1.23.1-p2
     container_name: lts-pgbouncer
@@ -288,6 +322,8 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.1.0
+    # Phase 07: 상한을 명시한다. 없으면 카디널리티 폭발 시 VM 메모리를 다 먹고
+    # OOM 으로 죽는데, 그때 "왜 죽었는지" 가 안 남는다. 상한이 있어야 원인이 분명해진다.
     container_name: lts-prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml

@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import Fastify from 'fastify';
 import { createReservation } from './reservation.js';
 import { closeDb, poolConfig, pool, classifyDbError } from './db.js';
+import { initCache, closeCache, cacheStats } from './cache.js';
 import {
   registry, httpRequestDuration, httpRequestsInFlight, reservationOutcomes, overloadMetrics,
 } from './metrics.js';
@@ -177,6 +178,8 @@ app.post('/api/v1/events/:eventId/reservations', async (req, reply) => {
     const transient = [
       'too_many_clients', 'pool_acquire_timeout',
       'statement_timeout', 'lock_timeout', 'idle_in_tx_timeout', 'deadlock',
+      // Phase 06 에서 빠져 있던 것. 프록시/DB 가 사라진 상황도 일시적 장애다.
+      'upstream_unreachable',
     ].includes(reason);
     if (transient) {
       return reply.code(503).header('Retry-After', '1')
@@ -272,13 +275,24 @@ if (cluster.isWorker) {
   });
 }
 
+// Redis 연결을 먼저 세운 뒤 listen 한다.
+// 순서를 반대로 하면 기동 직후 몇 초간 캐시가 없는 상태로 요청을 받아
+// 워밍업 구간 지표가 오염된다.
+//
+// ★ 실패해도 계속 진행한다. Redis 가 없다고 앱이 못 뜨면
+//   "캐시 장애 시 fallback" 실험 자체가 성립하지 않는다.
+await initCache().catch((err) => {
+  process.stderr.write(`cache_init_failed ${err.message}\n`);
+});
+
 app.listen({ port, host: '0.0.0.0', backlog })
   .then(() => process.stdout.write(
     `app listening on ${port} scheme=${tlsMode === 'off' ? 'http' : 'https'} `
     + `tlsMode=${tlsMode} poolMax=${poolConfig.max} pid=${process.pid} `
     + `cpuBurn=${overloadConfig.cpuBurnMs}ms(${burnIters}iter/ms,${overloadConfig.cpuBurnAsync ? 'async' : 'sync'}) `
     + `alloc=${overloadConfig.allocKb}KB shed(inflight=${overloadConfig.shedInflight},lag=${overloadConfig.shedLoopLagMs}ms) `
-    + `timeout=${overloadConfig.requestTimeoutMs}ms\n`,
+    + `timeout=${overloadConfig.requestTimeoutMs}ms `
+    + `cache=${cacheStats().mode}(ttl=${cacheStats().ttlMs}ms,jitter=${cacheStats().jitter},sf=${cacheStats().singleflight ? 1 : 0},redis=${cacheStats().redisReady ? 'up' : 'down'})\n`,
   ))
   .catch((err) => {
     process.stderr.write(`listen_failed ${err.message}\n`);
@@ -312,6 +326,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
     stopLoopLagProbe();
     workerMetricsServer?.close();
     await app.close();
+    await closeCache();
     await closeDb();
     process.stdout.write('shutdown: complete\n');
     process.exit(0);

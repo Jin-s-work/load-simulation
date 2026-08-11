@@ -1,7 +1,8 @@
 import { eq, and, sql } from 'drizzle-orm';
 import { db } from './db.js';
 import { events, reservations } from './schema.js';
-import { dbTransactionDuration, dbSlowQueryDuration } from './metrics.js';
+import { dbTransactionDuration, dbSlowQueryDuration, dbTouchTotal } from './metrics.js';
+import { cacheGet, cachePut, CACHE_MODE } from './cache.js';
 
 const num = (v, d) => (v === undefined || v === '' ? d : Number(v));
 
@@ -192,10 +193,73 @@ async function createOptimized({ eventId, userId, quantity, idempotencyKey }) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Phase 07: 캐시 경로
+//
+// 캐시할 수 있는 것과 없는 것이 명확히 갈린다.
+//
+//   캐시 가능   이벤트 존재 여부, 메타데이터, **매진 여부**
+//   캐시 불가   remaining 의 정확한 값, 재고 차감 자체
+//
+// 그래서 원칙이 이렇게 선다:
+//
+//   ★ 캐시는 거절을 빠르게 할 뿐, 허용을 보장하지 않는다.
+//
+//     캐시가 "매진" 이라 하면 -> 즉시 거절한다. 틀려도 손해가 작고 TTL 이 짧다
+//     캐시가 "재고 있음" 이라 하면 -> DB 의 원자적 UPDATE 가 최종 판정한다
+//
+// 틀리는 방향이 비대칭이라 이렇게 자를 수 있다.
+//   "재고 있는데 매진이라 함"  -> 살 수 있는 사람을 거절. 나쁘다. TTL 로 통제
+//   "매진인데 재고 있다 함"    -> DB 가 0행 반환 -> 정상 거절. 무해
+// ---------------------------------------------------------------------------
+
+const eventKey = (id) => `ev:${id}`;
+
+/** DB 에서 이벤트 상태를 읽는다. 캐시 miss 시의 loader. */
+async function loadEventState(eventId) {
+  const [ev] = await db
+    .select({ id: events.id, remaining: events.remaining, totalSeats: events.totalSeats })
+    .from(events)
+    .where(eq(events.id, eventId))
+    .limit(1);
+  if (!ev) return { exists: false, soldOut: true, remaining: 0 };
+  return { exists: true, soldOut: ev.remaining <= 0, remaining: ev.remaining };
+}
+
 export async function createReservation(input) {
   const txStart = process.hrtime.bigint();
   try {
-    return await (txOptimized ? createOptimized(input) : createNaive(input));
+    if (CACHE_MODE !== 'off') {
+      const key = eventKey(input.eventId);
+      const state = await cacheGet(key, () => loadEventState(input.eventId));
+
+      // 캐시가 "없다" 또는 "매진" 이라 하면 DB 를 아예 안 친다.
+      // 이 경로가 곧 DB QPS 감소분이다.
+      if (state && !state.exists) {
+        dbTouchTotal.inc({ path: 'short_circuit' });
+        return { outcome: 'not_found', fromCache: true };
+      }
+      if (state && state.soldOut) {
+        dbTouchTotal.inc({ path: 'short_circuit' });
+        return { outcome: 'sold_out', remaining: 0, fromCache: true };
+      }
+    }
+
+    dbTouchTotal.inc({ path: 'write' });
+    const result = await (txOptimized ? createOptimized(input) : createNaive(input));
+
+    // DB 가 진실을 알려줬다. 매진이면 캐시에 반영해서 다음 요청부터 짧게 끊는다.
+    if (CACHE_MODE !== 'off') {
+      if (result.outcome === 'sold_out') {
+        await cachePut(eventKey(input.eventId), { exists: true, soldOut: true, remaining: 0 });
+      } else if (result.outcome === 'not_found') {
+        await cachePut(eventKey(input.eventId), { exists: false, soldOut: true, remaining: 0 });
+      }
+      // 성공(created)일 때는 캐시를 갱신하지 않는다.
+      // remaining 을 캐시에 써 봐야 다음 요청이 오기 전에 이미 틀린 값이 되고,
+      // 매 성공마다 캐시를 쓰면 왕복만 늘어난다. TTL 만료를 기다리는 게 낫다.
+    }
+    return result;
   } finally {
     dbTransactionDuration.observe(Number(process.hrtime.bigint() - txStart) / 1e9);
   }

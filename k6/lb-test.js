@@ -45,6 +45,13 @@ export const options = {
   discardResponseBodies: true,   // 바디는 버려도 헤더는 남는다
   noConnectionReuse: NO_REUSE,
   summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
+  // ★ url 을 시스템 태그에서 뺀다.
+  //   k6 는 기본으로 요청 URL 을 라벨로 붙이는데, 이벤트가 1000개라
+  //   지표 하나당 수만 개의 시계열이 만들어진다(실측: url 라벨 값 1,001개,
+  //   지표당 41,443 시계열, 총 154만). remote-write 로 그게 그대로 Prometheus 에 간다.
+  //   Phase 07 에서 이것 때문에 Prometheus 가 OOM 으로 죽었다(exit 137).
+  //   name 은 lib.js 에서 'reservation' 으로 고정했으므로 라우트 구분은 유지된다.
+  systemTags: ['proto', 'status', 'method', 'scenario', 'name', 'group', 'check', 'error_code'],
   scenarios: {
     warmup: {
       executor: 'constant-arrival-rate',
