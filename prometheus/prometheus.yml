@@ -35,6 +35,17 @@ scrape_configs:
     static_configs:
       - targets: ["haproxy:8404"]
 
+  # Phase 08: 컨슈머. 워커 수가 실험마다 달라 안 뜬 타깃은 down 이 된다(정상).
+  - job_name: worker
+    scrape_interval: 1s
+    scrape_timeout: 900ms
+    static_configs:
+      - targets:
+          - "worker:3100"
+          - "worker2:3100"
+          - "worker3:3100"
+          - "worker4:3100"
+
   - job_name: postgres
     scrape_interval: 2s
     static_configs:

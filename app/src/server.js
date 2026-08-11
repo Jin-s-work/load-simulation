@@ -6,6 +6,7 @@ import Fastify from 'fastify';
 import { createReservation } from './reservation.js';
 import { closeDb, poolConfig, pool, classifyDbError } from './db.js';
 import { initCache, closeCache, cacheStats } from './cache.js';
+import { initQueue, closeQueue, queueStats } from './queue.js';
 import {
   registry, httpRequestDuration, httpRequestsInFlight, reservationOutcomes, overloadMetrics,
 } from './metrics.js';
@@ -157,6 +158,15 @@ app.post('/api/v1/events/:eventId/reservations', async (req, reply) => {
         return reply.code(409).send({ error: 'SOLD_OUT', remaining: result.remaining });
       case 'not_found':
         return reply.code(404).send({ error: 'EVENT_NOT_FOUND' });
+
+      // Phase 08: 큐에 접수됐을 뿐 아직 확정이 아니다.
+      // 201(Created) 이 아니라 202(Accepted) 로 답해야 의미가 맞는다.
+      case 'accepted':
+        return reply.code(202).send({
+          status: 'ACCEPTED',
+          idempotencyKey,
+          note: 'queued for processing',
+        });
       default:
         return reply.code(500).send({ error: 'UNKNOWN_OUTCOME' });
     }
@@ -285,6 +295,14 @@ await initCache().catch((err) => {
   process.stderr.write(`cache_init_failed ${err.message}\n`);
 });
 
+// Phase 08: 비동기 경로일 때만 큐에 붙는다.
+// 동기 경로에서 불필요한 연결을 만들지 않는다.
+if (process.env.ASYNC_WRITE === '1') {
+  await initQueue().catch((err) => {
+    process.stderr.write(`mq_init_failed ${err.message}\n`);
+  });
+}
+
 app.listen({ port, host: '0.0.0.0', backlog })
   .then(() => process.stdout.write(
     `app listening on ${port} scheme=${tlsMode === 'off' ? 'http' : 'https'} `
@@ -292,7 +310,8 @@ app.listen({ port, host: '0.0.0.0', backlog })
     + `cpuBurn=${overloadConfig.cpuBurnMs}ms(${burnIters}iter/ms,${overloadConfig.cpuBurnAsync ? 'async' : 'sync'}) `
     + `alloc=${overloadConfig.allocKb}KB shed(inflight=${overloadConfig.shedInflight},lag=${overloadConfig.shedLoopLagMs}ms) `
     + `timeout=${overloadConfig.requestTimeoutMs}ms `
-    + `cache=${cacheStats().mode}(ttl=${cacheStats().ttlMs}ms,jitter=${cacheStats().jitter},sf=${cacheStats().singleflight ? 1 : 0},redis=${cacheStats().redisReady ? 'up' : 'down'})\n`,
+    + `cache=${cacheStats().mode}(ttl=${cacheStats().ttlMs}ms,jitter=${cacheStats().jitter},sf=${cacheStats().singleflight ? 1 : 0},redis=${cacheStats().redisReady ? 'up' : 'down'}) `
+    + `async=${process.env.ASYNC_WRITE === '1' ? 1 : 0}(mq=${queueStats().ready ? 'up' : 'down'},gate=${process.env.STOCK_GATE === '1' ? 1 : 0})\n`,
   ))
   .catch((err) => {
     process.stderr.write(`listen_failed ${err.message}\n`);
@@ -326,6 +345,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
     stopLoopLagProbe();
     workerMetricsServer?.close();
     await app.close();
+    await closeQueue();
     await closeCache();
     await closeDb();
     process.stdout.write('shutdown: complete\n');

@@ -18,7 +18,13 @@ const SINGLEFLIGHT = process.env.SINGLEFLIGHT === '1';
 const LOCAL_MAX = num(process.env.CACHE_LOCAL_MAX, 5000);
 
 const useLocal = CACHE_MODE === 'local' || CACHE_MODE === 'tiered';
-const useRedis = CACHE_MODE === 'redis' || CACHE_MODE === 'tiered';
+
+// Phase 08: 재고 선점 게이트.
+// 큐로 쓰기를 미루면 "매진인데 202 를 주는" 일이 생긴다. 그걸 막으려면
+// 큐에 넣기 **전에** 재고를 원자적으로 잡아야 하고, Redis DECR 이 그 역할을 한다.
+// 이 기능이 켜지면 CACHE_MODE 와 무관하게 Redis 연결이 필요하다.
+export const STOCK_GATE = process.env.STOCK_GATE === '1';
+const useRedis = CACHE_MODE === 'redis' || CACHE_MODE === 'tiered' || STOCK_GATE;
 
 /** TTL 에 지터를 섞는다. 같이 넣은 키가 같이 만료되는 것을 막는다. */
 function ttlWithJitter() {
@@ -193,6 +199,46 @@ export async function cacheInvalidate(key) {
   if (CACHE_MODE === 'off') return;
   if (useLocal) localDel(key);
   if (useRedis) await redisDel(key);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 08: 재고 선점 (Redis 원자적 카운터)
+//
+// 왜 필요한가:
+//   재고 차감을 큐로 보내면 사용자에게 "예약됐다" 고 말할 수 없다. 매진일 수 있으니까.
+//   그렇다고 202 를 주고 나중에 취소를 통보하는 건 티켓팅에서 못 쓰는 설계다.
+//
+//   그래서 **판정은 동기, 반영은 비동기** 로 자른다.
+//     DECR 로 즉시 선점 -> 성공하면 큐에 넣고 202
+//     실패하면(0 미만) 그 자리에서 409
+//
+// DECR 은 원자적이라 여러 앱이 동시에 불러도 정확하다.
+// 음수가 나오면 INCR 로 되돌린다 — "빌렸다가 반납" 하는 셈이다.
+// ---------------------------------------------------------------------------
+const stockKey = (id) => `stock:${id}`;
+
+/** 재고를 하나 선점한다. 성공하면 true. */
+export async function reserveStock(eventId, qty = 1) {
+  if (!redis || !redisReady) return null;   // Redis 없으면 게이트를 못 쓴다 (호출부가 판단)
+  try {
+    const left = await redis.decrBy(stockKey(eventId), qty);
+    if (left < 0) {
+      // 초과 차감분을 되돌린다. 되돌리는 사이 다른 요청이 성공할 수 있지만,
+      // 그건 정상이다 — 재고가 실제로 그만큼 있었다는 뜻이므로.
+      await redis.incrBy(stockKey(eventId), qty);
+      return false;
+    }
+    return true;
+  } catch {
+    cacheErrors.inc({ op: 'decr' });
+    return null;
+  }
+}
+
+/** 선점을 되돌린다 (발행 실패 등으로 큐에 못 넣었을 때). */
+export async function releaseStock(eventId, qty = 1) {
+  if (!redis || !redisReady) return;
+  try { await redis.incrBy(stockKey(eventId), qty); } catch { cacheErrors.inc({ op: 'incr' }); }
 }
 
 export function cacheStats() {

@@ -72,6 +72,13 @@ x-app-env: &app-env
   CACHE_TTL_JITTER: ${CACHE_TTL_JITTER:-0}   # 0 = 지터 없음 = stampede 조건
   SINGLEFLIGHT: ${SINGLEFLIGHT:-0}
   REDIS_URL: redis://redis:6379
+  # ── Phase 08: 메시지 큐 ──────────────────────────────────────────────
+  ASYNC_WRITE: ${ASYNC_WRITE:-0}     # 1 이면 쓰기를 큐 뒤로 보내고 202 를 준다
+  STOCK_GATE: ${STOCK_GATE:-0}       # 1 이면 Redis DECR 로 재고를 선점한다
+  MQ_URL: amqp://lts:lts@rabbitmq:5672
+  MQ_QUEUE: reservations
+  MQ_CONFIRM: ${MQ_CONFIRM:-1}       # 발행 확인. 0 이면 빠르지만 유실 가능
+  MQ_MAX_RETRY: ${MQ_MAX_RETRY:-3}
 
 services:
   postgres:
@@ -206,6 +213,87 @@ services:
     cpus: ${REDIS_CPUS:-0.5}
     mem_limit: 256m
     restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Phase 08: 메시지 브로커.
+  #
+  # RabbitMQ 를 고른 이유 (Kafka 대신):
+  #   - VM 이 6 CPU / 8GB 인데 이미 앱 3~6대 + Redis + PgBouncer + Postgres +
+  #     HAProxy + k6 가 돈다. Kafka 는 브로커만 1GB 급이라 여유가 없다.
+  #   - Kafka 의 강점인 파티션 순서 보장이 우리에겐 필요 없다.
+  #     재고 차감은 교환법칙이 성립하고(누가 먼저 깎든 결과가 같다),
+  #     경쟁은 DB 의 조건부 원자 UPDATE 가 처리한다.
+  #   - DLQ 가 1급 기능이라 실험 설계에 유리하다.
+  #
+  # management 플러그인을 켠다. 큐 depth 를 HTTP API 로 읽어야 컨슈머 랙을 잰다.
+  # ---------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: lts-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: lts
+      RABBITMQ_DEFAULT_PASS: lts
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+    cpus: ${MQ_CPUS:-1.0}
+    mem_limit: 768m
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Phase 08: 컨슈머. 큐에서 꺼내 DB 에 실제로 반영한다.
+  #
+  # 워커도 DB 커넥션을 연다. 앱 3대 + 워커 N대가 같은 DB 를 두고 경쟁하므로,
+  # 워커를 늘리면 Phase 05 에서 본 커넥션 비용이 다시 걸린다.
+  # 그 지점을 찾는 것이 실험 4번이다.
+  # ---------------------------------------------------------------------------
+  worker: &worker-base
+    build: ./app
+    command: ["node", "src/worker.js"]
+    profiles: ["mq"]
+    environment:
+      <<: *app-env
+      WORKER_ID: worker1
+      WORKER_METRICS_PORT: 3100
+      MQ_PREFETCH: ${MQ_PREFETCH:-20}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    cpus: ${WORKER_CPUS:-0.4}
+    mem_limit: 384m
+    restart: unless-stopped
+
+  worker2:
+    <<: *worker-base
+    profiles: ["mq2"]
+    environment:
+      <<: *app-env
+      WORKER_ID: worker2
+      WORKER_METRICS_PORT: 3100
+      MQ_PREFETCH: ${MQ_PREFETCH:-20}
+
+  worker3:
+    <<: *worker-base
+    profiles: ["mq4"]
+    environment:
+      <<: *app-env
+      WORKER_ID: worker3
+      WORKER_METRICS_PORT: 3100
+      MQ_PREFETCH: ${MQ_PREFETCH:-20}
+
+  worker4:
+    <<: *worker-base
+    profiles: ["mq4"]
+    environment:
+      <<: *app-env
+      WORKER_ID: worker4
+      WORKER_METRICS_PORT: 3100
+      MQ_PREFETCH: ${MQ_PREFETCH:-20}
 
   pgbouncer:
     image: edoburu/pgbouncer:v1.23.1-p2

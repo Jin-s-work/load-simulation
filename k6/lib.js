@@ -99,7 +99,16 @@ export function recordStatus(res) {
   else statusCounters['4xx'].add(1);
 }
 
+// Phase 08: 중복 메시지 강제 주입.
+// at-least-once 에서 같은 메시지가 두 번 오는 상황을 만든다.
+// 직전 요청의 멱등키를 그대로 재사용하면 서버 입장에서는 재전송과 구분되지 않는다.
+export const DUP_RATIO = Number(__ENV.DUP_RATIO || 0);
+let lastKey = null;
+
 export function reservationRequest() {
+  const key = (DUP_RATIO > 0 && lastKey && Math.random() < DUP_RATIO)
+    ? lastKey
+    : (lastKey = nextIdempotencyKey());
   return {
     url: `${BASE_URL}/api/v1/events/${pickEventId()}/reservations`,
     body: JSON.stringify({
@@ -109,7 +118,7 @@ export function reservationRequest() {
     params: {
       headers: {
         'Content-Type': 'application/json',
-        'Idempotency-Key': nextIdempotencyKey(),
+        'Idempotency-Key': key,
       },
       // ★ name 태그를 고정한다.
       //   이걸 안 주면 k6 는 **URL 전체를 name 라벨로 쓴다.** 이벤트가 1000개라

@@ -1,8 +1,9 @@
 import { eq, and, sql } from 'drizzle-orm';
 import { db } from './db.js';
 import { events, reservations } from './schema.js';
-import { dbTransactionDuration, dbSlowQueryDuration, dbTouchTotal } from './metrics.js';
-import { cacheGet, cachePut, CACHE_MODE } from './cache.js';
+import { dbTransactionDuration, dbSlowQueryDuration, dbTouchTotal, stockGateRejects } from './metrics.js';
+import { cacheGet, cachePut, CACHE_MODE, STOCK_GATE, reserveStock, releaseStock } from './cache.js';
+import { publish } from './queue.js';
 
 const num = (v, d) => (v === undefined || v === '' ? d : Number(v));
 
@@ -226,9 +227,73 @@ async function loadEventState(eventId) {
   return { exists: true, soldOut: ev.remaining <= 0, remaining: ev.remaining };
 }
 
+// ---------------------------------------------------------------------------
+// Phase 08: 비동기 경로
+//
+// 동기: 재고 판정 + 차감 + INSERT 를 한 요청 안에서 -> 201 Created
+// 비동기: 재고 **판정만** 동기로 하고, 차감·INSERT 는 큐 뒤로 -> 202 Accepted
+//
+// ★ 응답의 의미가 바뀐다.
+//     201 "예약됐습니다"    <- 확정
+//     202 "접수됐습니다"    <- 확정 아님
+//
+//   이게 MQ 도입의 진짜 대가다. 처리량이나 지연이 아니라
+//   **사용자에게 무엇을 약속하는가** 가 바뀐다.
+//
+// 판정까지 비동기로 보내면 "매진인데 202 주고 나중에 취소 통보" 가 되어
+// 티켓팅에서 쓸 수 없다. 그래서 Redis 원자적 카운터로 **선점만 동기**로 한다.
+// ---------------------------------------------------------------------------
+const ASYNC_WRITE = process.env.ASYNC_WRITE === '1';
+
+async function createAsync(input) {
+  const { eventId, quantity } = input;
+
+  // ① 재고 선점. 원자적이라 여러 앱이 동시에 불러도 정확하다.
+  if (STOCK_GATE) {
+    const ok = await reserveStock(eventId, quantity);
+    if (ok === false) {
+      stockGateRejects.inc();
+      dbTouchTotal.inc({ path: 'short_circuit' });
+      return { outcome: 'sold_out', remaining: 0, fromGate: true };
+    }
+    // ok === null 이면 Redis 가 죽은 것이다.
+    // 게이트 없이 큐에 넣으면 초과 발행이 되므로, 여기서는 동기 경로로 내려간다.
+    if (ok === null) {
+      dbTouchTotal.inc({ path: 'write' });
+      return (txOptimized ? createOptimized(input) : createNaive(input));
+    }
+  }
+
+  // ② 발행. 실패하면 선점을 되돌리고 사용자에게 알린다.
+  //    여기서 실패를 삼키면 "202 를 줬는데 큐에 없는" 최악의 상태가 된다.
+  try {
+    await publish({ ...input, publishedAt: Date.now() });
+  } catch (err) {
+    if (STOCK_GATE) await releaseStock(eventId, quantity);
+    throw err;
+  }
+
+  return { outcome: 'accepted' };
+}
+
 export async function createReservation(input) {
   const txStart = process.hrtime.bigint();
   try {
+    if (ASYNC_WRITE) {
+      // 캐시 단락은 비동기 경로에서도 그대로 쓴다. 매진 거절은 큐도 안 거친다.
+      if (CACHE_MODE !== 'off') {
+        const state = await cacheGet(eventKey(input.eventId), () => loadEventState(input.eventId));
+        if (state && !state.exists) {
+          dbTouchTotal.inc({ path: 'short_circuit' });
+          return { outcome: 'not_found', fromCache: true };
+        }
+        if (state && state.soldOut) {
+          dbTouchTotal.inc({ path: 'short_circuit' });
+          return { outcome: 'sold_out', remaining: 0, fromCache: true };
+        }
+      }
+      return await createAsync(input);
+    }
     if (CACHE_MODE !== 'off') {
       const key = eventKey(input.eventId);
       const state = await cacheGet(key, () => loadEventState(input.eventId));

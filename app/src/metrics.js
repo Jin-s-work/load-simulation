@@ -109,6 +109,42 @@ export const dbTouchTotal = new client.Counter({
   registers: [registry],
 });
 
+// ---------------------------------------------------------------------------
+// Phase 08: 메시지 큐 지표
+// ---------------------------------------------------------------------------
+export const mqPublished = new client.Counter({
+  name: 'mq_published_total', help: '큐에 발행한 메시지 수', registers: [registry],
+});
+export const mqPublishErrors = new client.Counter({
+  name: 'mq_publish_errors_total', help: '발행 실패', labelNames: ['reason'], registers: [registry],
+});
+export const mqConsumed = new client.Counter({
+  name: 'mq_consumed_total', help: '워커가 처리한 메시지 수',
+  labelNames: ['outcome'],   // created | duplicate | sold_out | not_found | error
+  registers: [registry],
+});
+export const mqDlq = new client.Counter({
+  name: 'mq_dlq_total', help: 'DLQ 로 보낸 메시지 수', registers: [registry],
+});
+export const mqProcessDuration = new client.Histogram({
+  name: 'mq_process_duration_seconds', help: '워커의 메시지 처리 시간',
+  buckets: LATENCY_BUCKETS, registers: [registry],
+});
+// 발행 -> 처리 사이의 지연. 이게 곧 사용자가 체감하는 "최종 일관성 지연" 이다.
+export const mqE2eLatency = new client.Histogram({
+  name: 'mq_e2e_latency_seconds', help: '발행 시각부터 처리 완료까지',
+  buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60], registers: [registry],
+});
+// 재고 선점 게이트가 막은 요청. DB 도 큐도 안 친다.
+export const stockGateRejects = new client.Counter({
+  name: 'stock_gate_rejects_total', help: 'Redis 선점 실패로 즉시 거절', registers: [registry],
+});
+// ★ 202 를 줬는데 DB 에는 못 들어간 건수. 최종 일관성이 깨진 지점이다.
+export const asyncInconsistency = new client.Counter({
+  name: 'async_inconsistency_total', help: '202 응답 후 DB 반영 실패',
+  labelNames: ['reason'], registers: [registry],
+});
+
 export const reservationOutcomes = new client.Counter({
   name: 'reservation_outcomes_total',
   help: '예약 라우트의 결과 분포',

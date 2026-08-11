@@ -14,6 +14,10 @@ const WARMUP_SEC = Number(__ENV.WARMUP_SEC || 20);
 const GAP_SEC = 5;
 const NO_REUSE = __ENV.NO_REUSE === '1';
 const LABEL = __ENV.LABEL || 'lb-test';
+// Phase 08
+const SPIKE = __ENV.SPIKE === '1';
+const SPIKE_RATE = Number(__ENV.SPIKE_RATE || 3000);
+const SPIKE_SEC = Number(__ENV.SPIKE_SEC || 30);
 
 // 인스턴스별 처리 건수. LB 알고리즘의 효과가 여기서 그대로 드러난다.
 // Phase 06 에서 앱이 6대까지 늘어난다. 3대까지만 세면 app4~6 이 전부
@@ -34,12 +38,17 @@ const errs = {
   e502: new Counter('err_502_bad_gateway'),     // LB 는 살아있는데 백엔드가 응답 못 함
   e503: new Counter('err_503_unavailable'),     // 보낼 백엔드가 없음 / 큐 초과
   e504: new Counter('err_504_timeout'),         // 백엔드가 시간 안에 응답 못 함
+  // 409 는 매진 거절 = 정상 동작이다. "기타" 에 섞이면 진짜 오류와 구분이 안 된다.
+  soldOut: new Counter('err_409_sold_out'),
   other: new Counter('err_other'),
 };
 
 const okTrend = new Trend('ok_duration', true);
 
-http.setResponseCallback(http.expectedStatuses(200, 201));
+// Phase 08: 202 Accepted 를 성공으로 센다.
+// 비동기 경로는 "접수" 를 202 로 답하는데, 이게 빠지면 정상 응답이 전부
+// 실패로 집계되어 실패율 100% 라는 잘못된 그림이 나온다(실제로 그랬다).
+http.setResponseCallback(http.expectedStatuses(200, 201, 202));
 
 export const options = {
   discardResponseBodies: true,   // 바디는 버려도 헤더는 남는다
@@ -64,6 +73,23 @@ export const options = {
       tags: { phase: 'warmup' },
       gracefulStop: '3s',
     },
+    // Phase 08: 순간 스파이크. 평상시 부하 위에 3000 RPS 를 30초간 얹는다.
+    // MQ 가 버퍼 역할을 하는지(평탄화) 보는 것이 목적이다.
+    ...(SPIKE ? {
+      spike: {
+        executor: 'constant-arrival-rate',
+        rate: SPIKE_RATE,
+        timeUnit: '1s',
+        // 유지구간 중간쯤에 얹는다. 앞뒤로 평상시 구간이 있어야 비교가 된다.
+        startTime: `${WARMUP_SEC + GAP_SEC + 30}s`,
+        duration: `${SPIKE_SEC}s`,
+        preAllocatedVUs: 500,
+        maxVUs: 3000,
+        exec: 'reserve',
+        tags: { phase: 'spike' },
+        gracefulStop: '10s',
+      },
+    } : {}),
     steady: {
       executor: 'constant-arrival-rate',
       startTime: `${WARMUP_SEC + GAP_SEC}s`,
@@ -87,12 +113,15 @@ export function reserve() {
   (served[who] ?? served.unknown).add(1);
 
   const s = res.status;
-  if (s === 200 || s === 201) {
+  // Phase 08: 202 Accepted 는 성공이다. 201 과 의미가 다를 뿐(확정 vs 접수).
+  if (s === 200 || s === 201 || s === 202) {
     okTrend.add(res.timings.duration);
   } else if (s === 0) errs.noResponse.add(1);
   else if (s === 502) errs.e502.add(1);
   else if (s === 503) errs.e503.add(1);
   else if (s === 504) errs.e504.add(1);
+  // 409 는 매진 거절 = 정상 동작이다. "기타" 에 섞이면 진짜 오류와 구분이 안 된다.
+  else if (s === 409) errs.soldOut.add(1);
   else errs.other.add(1);
 }
 
@@ -118,6 +147,7 @@ export function handleSummary(data) {
     `  502 Bad Gateway       ${c('err_502_bad_gateway')}`,
     `  503 Unavailable       ${c('err_503_unavailable')}`,
     `  504 Gateway Timeout   ${c('err_504_timeout')}`,
+    `  409 매진(정상 거절)   ${c('err_409_sold_out')}`,
     `  기타                  ${c('err_other')}`,
     '',
     `대상: ${BASE_URL} · 고정 ${RATE} RPS / ${DURATION} · 커넥션재사용 ${NO_REUSE ? '끔' : '켬'}`,
