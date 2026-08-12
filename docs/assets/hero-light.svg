@@ -1,23 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="loadtest-sim — 하나의 라우트를 계층별로 터뜨리며 백엔드 병목을 해부한다">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="loadtest-sim — 하나의 라우트를 9단계에 걸쳐 터뜨리며 백엔드 병목을 해부한 기록">
   <title>loadtest-sim</title>
   <text x="600" y="112" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif" font-size="54" font-weight="700"
         letter-spacing="-1.6" fill="#1d1d1f" text-anchor="middle">loadtest&#8203;-sim</text>
   <text x="600" y="150" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif" font-size="17" font-weight="400"
-        fill="#6e6e73" text-anchor="middle">하나의 라우트를 계층별로 터뜨리며 백엔드 병목을 해부한다</text>
+        fill="#6e6e73" text-anchor="middle">하나의 라우트를 9단계에 걸쳐 터뜨리며 백엔드 병목을 해부한 기록</text>
   <line x1="576" y1="176" x2="624" y2="176" stroke="#0071e3" stroke-width="2" stroke-linecap="round"/>
 <line x1="368" y1="204" x2="368" y2="252" stroke="#d2d2d7" stroke-width="1"/><line x1="600" y1="204" x2="600" y2="252" stroke="#d2d2d7" stroke-width="1"/><line x1="832" y1="204" x2="832" y2="252" stroke="#d2d2d7" stroke-width="1"/>
     <text x="252" y="228" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif" font-size="40" font-weight="600"
-          letter-spacing="-0.8" fill="#1d1d1f" text-anchor="middle">8 / 9</text>
+          letter-spacing="-0.8" fill="#1d1d1f" text-anchor="middle">9 / 9</text>
     <text x="252" y="256" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif" font-size="12" font-weight="500"
           letter-spacing="0.4" fill="#86868b" text-anchor="middle">완료한 Phase</text>
     <text x="484" y="228" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif" font-size="40" font-weight="600"
-          letter-spacing="-0.8" fill="#1d1d1f" text-anchor="middle">71%</text>
+          letter-spacing="-0.8" fill="#1d1d1f" text-anchor="middle">1,005</text>
     <text x="484" y="256" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif" font-size="12" font-weight="500"
-          letter-spacing="0.4" fill="#86868b" text-anchor="middle">DB 접촉 감소 (Phase 07)</text>
+          letter-spacing="0.4" fill="#86868b" text-anchor="middle">RPS · 10분 지속</text>
     <text x="716" y="228" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif" font-size="40" font-weight="600"
-          letter-spacing="-0.8" fill="#1d1d1f" text-anchor="middle">53%</text>
+          letter-spacing="-0.8" fill="#1d1d1f" text-anchor="middle">105ms</text>
     <text x="716" y="256" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif" font-size="12" font-weight="500"
-          letter-spacing="0.4" fill="#86868b" text-anchor="middle">DB 메모리 절감 (Phase 06)</text>
+          letter-spacing="0.4" fill="#86868b" text-anchor="middle">p99 (목표 200ms)</text>
     <text x="948" y="228" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif" font-size="40" font-weight="600"
           letter-spacing="-0.8" fill="#1d1d1f" text-anchor="middle">7.9×</text>
     <text x="948" y="256" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif" font-size="12" font-weight="500"

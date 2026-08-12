@@ -42,9 +42,9 @@ const THEMES = {
 // ── 헤더에 세울 숫자 ────────────────────────────────────────────────
 // 전부 실측값이다. 추측한 숫자를 여기 넣지 않는다.
 const STATS = [
-  { value: '8 / 9', label: '완료한 Phase' },
-  { value: '71%', label: 'DB 접촉 감소 (Phase 07)' },
-  { value: '53%', label: 'DB 메모리 절감 (Phase 06)' },
+  { value: '9 / 9', label: '완료한 Phase' },
+  { value: '1,005', label: 'RPS · 10분 지속' },
+  { value: '105ms', label: 'p99 (목표 200ms)' },
   { value: '7.9×', label: '처리량 개선 (Phase 05)' },
 ];
 
@@ -57,7 +57,7 @@ const PHASES = [
   { no: '06', name: 'DB 프록시', done: true },
   { no: '07', name: '캐시', done: true },
   { no: '08', name: 'MQ', done: true },
-  { no: '09', name: '클라우드', done: false },
+  { no: '09', name: '최종 검증', done: true },
 ];
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -92,12 +92,12 @@ function hero(t) {
     return `<line x1="${x}" y1="204" x2="${x}" y2="252" stroke="${t.line}" stroke-width="1"/>`;
   }).join('');
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="loadtest-sim — 하나의 라우트를 계층별로 터뜨리며 백엔드 병목을 해부한다">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="loadtest-sim — 하나의 라우트를 9단계에 걸쳐 터뜨리며 백엔드 병목을 해부한 기록">
   <title>loadtest-sim</title>
   <text x="${cx}" y="112" font-family="${FONT}" font-size="54" font-weight="700"
         letter-spacing="-1.6" fill="${t.fg}" text-anchor="middle">loadtest&#8203;-sim</text>
   <text x="${cx}" y="150" font-family="${FONT}" font-size="17" font-weight="400"
-        fill="${t.fg2}" text-anchor="middle">하나의 라우트를 계층별로 터뜨리며 백엔드 병목을 해부한다</text>
+        fill="${t.fg2}" text-anchor="middle">하나의 라우트를 9단계에 걸쳐 터뜨리며 백엔드 병목을 해부한 기록</text>
   <line x1="${cx - 24}" y1="176" x2="${cx + 24}" y2="176" stroke="${t.accent}" stroke-width="2" stroke-linecap="round"/>
 ${seps}${cols}
 </svg>
