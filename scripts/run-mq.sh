@@ -104,9 +104,22 @@ echo "    앱 cpus=${APP_CPUS} × 3대   부하 ${RATE} RPS / ${DURATION} / ${KE
 
 echo "==> 인프라 기동 (redis, rabbitmq, pgbouncer)"
 docker compose up -d --force-recreate --no-deps redis rabbitmq pgbouncer >/dev/null 2>&1
-for _ in $(seq 1 60); do
-  docker compose exec -T rabbitmq rabbitmq-diagnostics -q ping >/dev/null 2>&1 && break; sleep 2
-done
+# ★ 대기에 `docker compose exec` 를 쓰지 않는다.
+#   맥이 절전에 들어가면 exec 세션이 끊긴 채로 **영원히 매달린다.**
+#   실제로 이것 때문에 실험이 1시간 43분간 멈춰 있었다(타임아웃이 없어 감지도 못 했다).
+#   컨테이너가 포트를 호스트로 노출하므로 bash 의 /dev/tcp 로 직접 확인한다.
+#   호스트 소켓 연결은 절전에서 깨어나면 즉시 실패하지 매달리지 않는다.
+wait_port() {   # wait_port <포트> <이름> [최대초]
+  local port="$1" name="$2" max="${3:-120}" i=0
+  while [ "$i" -lt "$max" ]; do
+    (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null && { exec 3<&- 3>&-; return 0; }
+    sleep 1; i=$((i+1))
+  done
+  echo "    !! ${name} 포트 ${port} 대기 시간 초과 (${max}s)"
+  return 1
+}
+wait_port 5672 rabbitmq 120 || true
+wait_port 6379 redis 60 || true
 docker compose exec -T redis redis-cli FLUSHALL >/dev/null 2>&1 || true
 # 큐를 비운다. 이전 런이 남긴 메시지가 이번 랙 측정을 오염시킨다.
 docker compose exec -T rabbitmq rabbitmqctl purge_queue reservations >/dev/null 2>&1 || true
@@ -156,10 +169,17 @@ rm -f "results/${EXP}.stats.csv" "results/${EXP}.mq.csv" "results/${EXP}.stock.c
 echo "ts,messages,ready,unacked,dlq,publish_rate,deliver_rate" > "results/${EXP}.mq.csv"
 ( while true; do
   t=$(date +%s)
-  r=$(docker compose exec -T rabbitmq rabbitmqctl list_queues -q --no-table-headers \
-        name messages messages_ready messages_unacknowledged 2>/dev/null \
-      | awk '$1=="reservations"{m=$2;rd=$3;un=$4} $1=="reservations.dlq"{d=$2}
-             END{print (m+0)","(rd+0)","(un+0)","(d+0)}')
+  # ★ docker compose exec 을 쓰지 않는다. 절전에서 깨어나면 매달린다.
+  #   management 플러그인의 HTTP API 를 호스트에서 직접 부른다(포트 15672 노출됨).
+  #   curl 은 --max-time 으로 상한을 둘 수 있어 절대 매달리지 않는다.
+  r=$(curl -s --max-time 3 -u lts:lts 'http://localhost:15672/api/queues/%2F' 2>/dev/null \
+      | python3 -c "
+import json,sys
+try: qs={q['name']:q for q in json.load(sys.stdin)}
+except Exception: sys.exit(1)
+r=qs.get('reservations',{}); d=qs.get('reservations.dlq',{})
+print(f\"{r.get('messages',0)},{r.get('messages_ready',0)},{r.get('messages_unacknowledged',0)},{d.get('messages',0)}\")
+" 2>/dev/null)
   [ -n "$r" ] && echo "${t},${r},," >> "results/${EXP}.mq.csv"
   sleep 2
 done ) & MQPID=$!
@@ -201,8 +221,8 @@ if [ "$WORKERS" -ge 1 ]; then
   echo "==> 큐 배수(drain) 대기 — 복구 시간 측정"
   DRAIN_START=$(date +%s)
   for _ in $(seq 1 120); do
-    left=$(docker compose exec -T rabbitmq rabbitmqctl list_queues -q --no-table-headers name messages 2>/dev/null \
-           | awk '$1=="reservations"{print $2+0}')
+    left=$(curl -s --max-time 3 -u lts:lts 'http://localhost:15672/api/queues/%2F/reservations' 2>/dev/null \
+           | python3 -c "import json,sys;print(json.load(sys.stdin).get('messages',0))" 2>/dev/null)
     [ "${left:-0}" -le 0 ] && break
     sleep 2
   done
@@ -217,8 +237,8 @@ kill "$STATPID" "$MQPID" "$STOCKPID" 2>/dev/null || true
 trap - EXIT
 
 FINAL_RES=$("${PSQL[@]}" -tAc "select count(*) from reservations" 2>/dev/null | tr -d ' ')
-DLQ_N=$(docker compose exec -T rabbitmq rabbitmqctl list_queues -q --no-table-headers name messages 2>/dev/null \
-        | awk '$1=="reservations.dlq"{print $2+0}')
+DLQ_N=$(curl -s --max-time 3 -u lts:lts 'http://localhost:15672/api/queues/%2F/reservations.dlq' 2>/dev/null \
+        | python3 -c "import json,sys;print(json.load(sys.stdin).get('messages',0))" 2>/dev/null)
 
 cat > "results/${EXP}.meta.json" <<EOF
 {

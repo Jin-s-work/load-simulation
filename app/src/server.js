@@ -189,7 +189,7 @@ app.post('/api/v1/events/:eventId/reservations', async (req, reply) => {
       'too_many_clients', 'pool_acquire_timeout',
       'statement_timeout', 'lock_timeout', 'idle_in_tx_timeout', 'deadlock',
       // Phase 06 에서 빠져 있던 것. 프록시/DB 가 사라진 상황도 일시적 장애다.
-      'upstream_unreachable',
+      'upstream_unreachable', 'mq_unavailable',
     ].includes(reason);
     if (transient) {
       return reply.code(503).header('Retry-After', '1')

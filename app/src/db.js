@@ -78,6 +78,9 @@ export function classifyDbError(err) {
   // 실제로는 재시도 가능한 일시적 장애다 — 프록시/DB 가 돌아오면 정상화된다.
   if (code === 'ENOTFOUND' || code === 'ECONNREFUSED' || code === 'ECONNRESET'
       || code === 'EHOSTUNREACH' || code === 'ETIMEDOUT') return 'upstream_unreachable';
+  // Phase 08: 브로커에 아직/다시 못 붙은 상태. 재시도하면 되는 일시적 장애다.
+  // 500 으로 답하면 클라이언트가 영구 오류로 오해한다.
+  if (code === 'MQ_NOT_READY') return 'mq_unavailable';
   if (code === '53300' || /too many clients/i.test(msg)) return 'too_many_clients';
   if (code === '57014' || /statement timeout/i.test(msg)) return 'statement_timeout';
   if (code === '55P03' || /lock timeout/i.test(msg)) return 'lock_timeout';

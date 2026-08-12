@@ -40,20 +40,61 @@ async function declareTopology(channel) {
   });
 }
 
-export async function initQueue({ consumer = false } = {}) {
+let reconnectTimer = null;
+let lastOpts = { consumer: false };
+let closing = false;
+
+/**
+ * 브로커에 붙는다. **실패하면 배경에서 계속 재시도한다.**
+ *
+ * 한 번 실패하고 포기하면 안 되는 이유가 두 가지다.
+ *   ① 기동 순서. 앱이 브로커보다 먼저 뜨면 ECONNREFUSED 가 난다.
+ *      실제로 이것 때문에 첫 런이 통째로 날아갔다(예약행 0, 전부 500 MQ_NOT_READY).
+ *   ② 브로커 장애. 죽었다 살아나면 앱이 스스로 붙어야 한다.
+ *      사람이 앱을 재시작해줘야 한다면 그건 설계가 아니다.
+ */
+async function connectOnce(consumer) {
   conn = await amqp.connect(MQ_URL);
   // ★ 핸들러가 없으면 브로커가 죽는 순간 unhandled error 로 프로세스가 같이 죽는다.
   conn.on('error', () => { mqReady = false; });
-  conn.on('close', () => { mqReady = false; });
+  conn.on('close', () => { mqReady = false; scheduleReconnect(); });
 
   ch = consumer || !MQ_CONFIRM
     ? await conn.createChannel()
     : await conn.createConfirmChannel();
 
   ch.on('error', () => { mqReady = false; });
+  ch.on('close', () => { mqReady = false; });
   await declareTopology(ch);
   mqReady = true;
   return { conn, ch };
+}
+
+function scheduleReconnect(delay = 500) {
+  if (closing || reconnectTimer) return;
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    try {
+      await connectOnce(lastOpts.consumer);
+      if (lastOpts.onReconnect) await lastOpts.onReconnect(ch);
+    } catch {
+      // 지수 백오프. 상한을 두지 않으면 브로커가 오래 죽어 있을 때 CPU 를 태운다.
+      scheduleReconnect(Math.min(delay * 2, 5000));
+    }
+  }, delay);
+}
+
+export async function initQueue(opts = {}) {
+  lastOpts = { consumer: false, ...opts };
+  closing = false;
+  try {
+    return await connectOnce(lastOpts.consumer);
+  } catch (err) {
+    // 여기서 던지지 않는다. 배경 재시도에 맡기고 앱은 기동시킨다.
+    // 큐가 없으면 발행이 실패해 사용자에게 503 이 가는데, 그건 정상적인 열화다.
+    scheduleReconnect();
+    throw err;
+  }
 }
 
 /**
@@ -90,6 +131,8 @@ export function queueStats() {
 }
 
 export async function closeQueue() {
+  closing = true;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   try { if (ch) await ch.close(); } catch { /* 종료 중 실패는 무시 */ }
   try { if (conn) await conn.close(); } catch { /* 종료 중 실패는 무시 */ }
 }

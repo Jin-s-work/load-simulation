@@ -7,7 +7,7 @@
 
 <br>
 
-![Phase](https://img.shields.io/badge/phase-07%20%2F%2009-0071e3?style=flat-square&labelColor=1d1d1f)
+![Phase](https://img.shields.io/badge/phase-08%20%2F%2009-0071e3?style=flat-square&labelColor=1d1d1f)
 ![Node](https://img.shields.io/badge/Node-24-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white&labelColor=1d1d1f)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat-square&logo=postgresql&logoColor=white&labelColor=1d1d1f)
 ![k6](https://img.shields.io/badge/k6-0.56-7D64FF?style=flat-square&logo=k6&logoColor=white&labelColor=1d1d1f)
@@ -113,6 +113,7 @@ flowchart LR
 | DB | Postgres 16-alpine | 설정 무수정 (`max_connections` 100) |
 | DB 프록시 | PgBouncer 1.23 | Phase 06~, transaction 모드 |
 | 캐시 | Redis 7.4 | Phase 07~, cache-aside |
+| 메시지 큐 | RabbitMQ 3.13 | Phase 08~, at-least-once + DLQ |
 | LB | HAProxy 3.0 | nginx는 Phase 02 TLS 종료용으로만 |
 | 부하 | k6 0.56 | open model (`ramping-arrival-rate`) |
 | 관측 | Prometheus · Grafana · postgres_exporter | 앱은 1초 해상도 |
@@ -143,12 +144,12 @@ colima 환경에서 컨테이너 이름 라벨이 안 붙었고, 대량 시계�
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/roadmap-dark.svg">
-  <img alt="Phase 로드맵 — 9단계 중 7단계 완료" src="docs/assets/roadmap-light.svg" width="100%">
+  <img alt="Phase 로드맵 — 9단계 중 8단계 완료" src="docs/assets/roadmap-light.svg" width="100%">
 </picture>
 
 </div>
 
-### 핵심 발견 일곱
+### 핵심 발견 여덟
 
 > **처리량은 CPU가 정한다.** 요청당 CPU를 10ms 넣으면 100.20 RPS, 30ms 넣으면 34.30 RPS가 나옵니다. 이론값 `1000/X` 와 오차 3% 안에서 일치했습니다.
 
@@ -157,6 +158,8 @@ colima 환경에서 컨테이너 이름 라벨이 안 붙었고, 대량 시계�
 > **빨리 거절하는 게 느려지는 것보다 낫다.** load shedding을 넣자 실패율이 9.6% → 68.7%로 늘었는데, 성공 처리량은 그대로면서 p50이 **21,914ms → 493ms** 가 됐습니다. 실패율이 7배 늘어난 게 개선입니다.
 
 > **타임아웃만으로는 최악이다.** 실패율 99.8%. 응답은 포기해도 서버는 그 요청의 CPU 연산을 계속 돌립니다. 자원을 다 쓰고도 전부 실패했습니다.
+
+>**큐로 빼면 무조건 빨라지는 게 아니다.** 저부하(600 RPS)에서는 오히려 p99가 95.87 → 233.56ms로 **나빠졌습니다** — DB 트랜잭션 1회를 Redis + 브로커 왕복 2회로 바꾼 셈이니까요. 반대로 고부하(1,500 RPS)에서는 241.05 → 80.58ms로 **3배 좋아졌습니다.**
 
 >**로컬 캐시는 인스턴스가 늘수록 나빠진다.** 앱 3대가 각자 캐시를 갖고 있으니 같은 키에 miss가 3번 납니다. 균등 분포에서 로컬 hit ratio는 **37.6%**, 공유 캐시(Redis)는 **64.5%** 였습니다.
 
@@ -175,7 +178,7 @@ colima 환경에서 컨테이너 이름 라벨이 안 붙었고, 대량 시계�
 | **05** | 커넥션 풀 | 풀 크기를 양극단으로 + 락 경합 + 느린 쿼리 | 커넥션당 **3.1MB** 선형 · 인덱스 하나가 처리량 **7.9배** | [📄](docs/labs/05-db-pool.md) |
 | **06** | DB 프록시 | 앱 3→6대 확장 + PgBouncer 투입·모드 비교·SPOF | 앱 대수와 무관하게 DB 커넥션 **22개 고정** · 메모리 **53%** 절감 | [📄](docs/labs/06-db-proxy.md) |
 | **07** | 캐시 | 재고를 희소화해 매진 발생 + 로컬/Redis/2단 비교 + stampede | DB 접촉 **71%** 감소 · 로컬은 hit ratio **26.9%p** 낮음 | [📄](docs/labs/07-cache.md) |
-| 08 | 메시지 큐 | — | 예정 | |
+| **08** | 메시지 큐 | 쓰기를 큐 뒤로 + 3000 RPS 스파이크 + 중복 주입 | 고부하 p99 **3배** 개선 · 스파이크 흡수 · **SLO 최초 달성** | [📄](docs/labs/08-mq.md) |
 | 09 | 클라우드 확장 | — | 예정 | |
 
 <details>

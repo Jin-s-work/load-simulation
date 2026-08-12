@@ -50,7 +50,9 @@ function csvRows(name, suffix) {
 function k6Stats(name) {
   const p = path.join(ROOT, 'results', `${name}.log`);
   if (!fs.existsSync(p)) return {};
-  const t = fs.readFileSync(p, 'latin1');
+    // ★ utf8 로 읽어야 한다. latin1 로 읽으면 한글이 깨져 정규식이 전부 안 맞는다.
+  //   (공백도 지우면 안 된다 — 아래 정규식들이 공백을 포함해 쓰였다.)
+  const t = fs.readFileSync(p, 'utf8');
   const g = (re) => { const m = t.match(re); return m ? m[1] : null; };
   return {
     rps: g(/평균 ([\d.]+) RPS/),

@@ -56,13 +56,15 @@ async function handle(payload) {
   });
 }
 
-async function main() {
-  const { ch } = await initQueue({ consumer: true });
-
+/**
+ * 소비를 건다. 재연결 후에도 다시 불러야 한다 —
+ * 채널이 새로 만들어지면 기존 consumer 등록은 사라지기 때문이다.
+ * 이걸 빼먹으면 "브로커는 살아났는데 아무도 안 먹는" 상태가 된다.
+ */
+async function startConsuming(ch) {
   // prefetch 는 "한 워커가 동시에 붙잡을 메시지 수" 다.
   // 무제한이면 워커 하나가 큐를 통째로 빨아들여 다른 워커가 굶는다.
   await ch.prefetch(PREFETCH);
-
   process.stdout.write(`worker ${WORKER_ID} consuming ${QUEUE} prefetch=${PREFETCH}\n`);
 
   await ch.consume(QUEUE, async (msg) => {
@@ -113,6 +115,12 @@ async function main() {
       mqProcessDuration.observe(Number(process.hrtime.bigint() - t0) / 1e9);
     }
   }, { noAck: false });
+}
+
+async function main() {
+  // onReconnect 로 넘겨 두면 브로커가 죽었다 살아날 때 소비가 자동으로 재개된다.
+  const { ch } = await initQueue({ consumer: true, onReconnect: startConsuming });
+  await startConsuming(ch);
 
   // 지표 노출. 앱과 포트가 겹치지 않게 별도 포트를 쓴다.
   http.createServer(async (req, res) => {
