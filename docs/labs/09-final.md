@@ -265,6 +265,30 @@ if (deaths >= MQ_MAX_RETRY) {
 다만 **일시적 오류(로그인 타임아웃)를 재시도 없이 버린 것**은 고쳐야 한다.
 `mq_dlq_total` 카운터도 else 분기에서 증가하지 않아 0으로 보였다 — 계측도 함께 틀렸다.
 
+> **[수정 완료 · Phase 10]** 지연 재시도 큐를 넣어 고쳤다.
+>
+> ```
+> reservations.retry  (x-message-ttl=2000, dead-letter → reservations)
+> ```
+>
+> RabbitMQ 에는 "N초 뒤에 다시" 가 없다. TTL 이 걸린 큐에 넣으면 만료 시 dead-letter 로
+> 나가는데, 그 목적지를 **본 큐**로 잡아 두면 지연 재시도가 된다. 컨슈머는 안 붙인다 —
+> 시간이 지나기를 기다리는 대기실이다.
+>
+> 재시도 횟수는 브로커의 `x-death` 대신 **우리가 붙인 `x-retry-count`** 로 센다.
+> 재시도 경로를 거치면 `x-death` 의 의미가 흐려지기 때문이다.
+>
+> **검증** — PgBouncer 를 잠깐 내려 일시적 오류를 만들었다.
+>
+> ```
+> worker_retry attempt=1/3 after=2000ms ENOTFOUND getaddrinfo ENOTFOUND pgbouncer
+> 예약행 3 → 5      ★ 재시도로 살아난 건수 2
+> mq_retries_total 2,  mq_dlq_total 0
+> ```
+>
+> 장애가 재시도 창(2초 × 3회 = 6초)보다 길면 예상대로 DLQ 로 간다(별도 확인).
+> `mq_retries_total` 을 새로 만들어 "재시도로 살아난 것" 과 "결국 버린 것" 을 나눠 센다.
+
 ### ② soak 의 큐 샘플러가 헤더만 남겼다
 
 `soak.mq.csv` 에 데이터 행이 없다. 10분 동안 한 번도 못 받았다는 뜻인데,

@@ -124,7 +124,12 @@ export const mqConsumed = new client.Counter({
   registers: [registry],
 });
 export const mqDlq = new client.Counter({
-  name: 'mq_dlq_total', help: 'DLQ 로 보낸 메시지 수', registers: [registry],
+  name: 'mq_dlq_total', help: 'DLQ 로 보낸 메시지 수 (재시도 한도 초과)', registers: [registry],
+});
+// 지연 재시도 큐로 보낸 횟수. DLQ 와 나눠 세야
+// "재시도로 살아난 것" 과 "결국 버린 것" 을 구분할 수 있다.
+export const mqRetries = new client.Counter({
+  name: 'mq_retries_total', help: '지연 재시도 큐로 보낸 메시지 수', registers: [registry],
 });
 export const mqProcessDuration = new client.Histogram({
   name: 'mq_process_duration_seconds', help: '워커의 메시지 처리 시간',

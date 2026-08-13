@@ -14,7 +14,7 @@
 ![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600?style=flat-square&logo=rabbitmq&logoColor=white&labelColor=1d1d1f)
 ![k6](https://img.shields.io/badge/k6-0.56-7D64FF?style=flat-square&logo=k6&logoColor=white&labelColor=1d1d1f)
 
-**[실험 기록 9편](docs/labs/)** · **[최종 검증](docs/labs/09-final.md)** · **[SLO·알람](docs/slo.md)** · **[빠른 시작](#-빠른-시작)**
+**[실험 기록](docs/labs/)** · **[최종 검증](docs/labs/09-final.md)** · **[SLO·알람](docs/slo.md)** · **[빠른 시작](#-빠른-시작)**
 
 </div>
 
@@ -76,6 +76,7 @@
 | **07** | 캐시 | 재고 희소화 + 로컬/Redis/2단 + stampede | DB 접촉 **71%** 감소 · 로컬이 hit **26.9%p** 낮음 | [📄](docs/labs/07-cache.md) |
 | **08** | 메시지 큐 | 쓰기를 큐 뒤로 + 3000 RPS 스파이크 | 고부하 p99 **3배** · 스파이크 흡수(depth 1,833→8초) | [📄](docs/labs/08-mq.md) |
 | **09** | 최종 검증 | 10분 soak · 2000 RPS 스파이크 · 앱 kill | **SLO 전 항목 달성** | [📄](docs/labs/09-final.md) |
+| **10** | 클라우드 설계 | (배포 없음) 매니지드 매핑 · 서버리스 경계 · 비용 | 지속 부하에선 상주가 **2.5배** 저렴 | [📄](docs/labs/10-cloud.md) |
 
 </details>
 
@@ -161,8 +162,8 @@ DB 메모리 회귀식은 Phase 05에서 뽑아 Phase 06·09에서 **세 번 재
 
 이 프로젝트는 **틀린 가설과 미측정 항목을 지우지 않습니다.**
 
+
 - **메모리 누수 판정 보류.** 10분 soak에서 힙 기울기 +0.64MB/분. 워밍업 잔여인지 느린 누수인지 10분으로는 구분 못 합니다. 1시간 이상 필요합니다.
-- **워커 재시도가 동작하지 않습니다.** `MQ_MAX_RETRY=3`을 설정했는데 첫 실패에 바로 DLQ로 갑니다(`x-death count=1`). 두 분기가 동일한 `nack(requeue=false)`를 호출하는 버그입니다.
 - **진짜 처리량 천장 미측정.** 1,500 RPS를 요청했고 그만큼 나왔을 뿐 더 올려보지 않았습니다. CPU는 6코어 중 2.4코어만 썼습니다.
 - **Phase 08에서 숫자를 오독했습니다.** "1,189 RPS에서 멈췄다"고 썼는데 워밍업 섞인 평균이었습니다. [해당 문서에 정정을 달았습니다](docs/labs/08-mq.md).
 
@@ -313,5 +314,5 @@ results/        k6 원본 출력 (git 미추적)
 ---
 
 <div align="center">
-<sub>실험 기록 9편은 <a href="docs/labs/">docs/labs/</a> · 작업 규칙은 <a href="CLAUDE.md">CLAUDE.md</a></sub>
+<sub>실험 기록은 <a href="docs/labs/">docs/labs/</a> · 작업 규칙은 <a href="docs/conventions.md">docs/conventions.md</a></sub>
 </div>

@@ -6,6 +6,9 @@ const num = (v, d) => (v === undefined || v === '' ? d : Number(v));
 export const MQ_URL = process.env.MQ_URL || 'amqp://lts:lts@rabbitmq:5672';
 export const QUEUE = process.env.MQ_QUEUE || 'reservations';
 export const DLQ = `${QUEUE}.dlq`;
+export const RETRY_Q = `${QUEUE}.retry`;
+// 재시도 대기 시간. 이 TTL 이 지나면 메시지가 자동으로 본 큐로 돌아간다.
+export const MQ_RETRY_DELAY_MS = num(process.env.MQ_RETRY_DELAY_MS, 2000);
 export const MQ_MAX_RETRY = num(process.env.MQ_MAX_RETRY, 3);
 
 // 발행 확인(publisher confirm)을 쓸지.
@@ -30,6 +33,22 @@ export let mqReady = false;
  */
 async function declareTopology(channel) {
   await channel.assertQueue(DLQ, { durable: true });
+
+  // ★ 지연 재시도 큐.
+  //   RabbitMQ 에는 "N초 뒤에 다시 주세요" 가 없다. 대신 이 조합을 쓴다:
+  //     TTL 이 걸린 큐에 넣는다 -> TTL 이 지나면 만료되어 dead-letter 로 나간다
+  //     -> 그 dead-letter 목적지를 **본 큐**로 잡아 두면 자동으로 돌아온다
+  //
+  //   이 큐에는 컨슈머를 붙이지 않는다. 오직 시간이 지나기를 기다리는 대기실이다.
+  await channel.assertQueue(RETRY_Q, {
+    durable: true,
+    arguments: {
+      'x-message-ttl': MQ_RETRY_DELAY_MS,
+      'x-dead-letter-exchange': '',
+      'x-dead-letter-routing-key': QUEUE,     // 만료되면 본 큐로 되돌아간다
+    },
+  });
+
   await channel.assertQueue(QUEUE, {
     durable: true,
     arguments: {
@@ -37,6 +56,25 @@ async function declareTopology(channel) {
       'x-dead-letter-exchange': '',
       'x-dead-letter-routing-key': DLQ,
     },
+  });
+}
+
+/**
+ * 재시도 큐로 보낸다. TTL 이 지나면 본 큐로 자동 복귀한다.
+ *
+ * ★ 왜 nack(requeue=true) 를 안 쓰나:
+ *   즉시 재큐라 실패가 반복되면 CPU 를 태우며 폭주한다.
+ *   지연이 있어야 "일시적 장애가 지나가기를 기다린다" 가 된다.
+ *
+ * ★ 왜 nack(requeue=false) 만으로는 안 되나:
+ *   그건 곧장 DLQ 다. Phase 09 에서 실제로 그렇게 동작해
+ *   client_login_timeout(일시적) 메시지 하나를 재시도 없이 버렸다.
+ */
+export function scheduleRetry(channel, msg, attempt) {
+  channel.sendToQueue(RETRY_Q, msg.content, {
+    persistent: true,
+    messageId: msg.properties.messageId,
+    headers: { ...(msg.properties.headers || {}), 'x-retry-count': attempt },
   });
 }
 

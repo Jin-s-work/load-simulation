@@ -3,9 +3,11 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db, closeDb } from './db.js';
 import { events, reservations } from './schema.js';
 import {
-  registry, mqConsumed, mqDlq, mqProcessDuration, mqE2eLatency, asyncInconsistency,
+  registry, mqConsumed, mqDlq, mqRetries, mqProcessDuration, mqE2eLatency, asyncInconsistency,
 } from './metrics.js';
-import { initQueue, closeQueue, QUEUE, DLQ, MQ_MAX_RETRY } from './queue.js';
+import {
+  initQueue, closeQueue, scheduleRetry, QUEUE, DLQ, MQ_MAX_RETRY, MQ_RETRY_DELAY_MS,
+} from './queue.js';
 
 const num = (v, d) => (v === undefined || v === '' ? d : Number(v));
 
@@ -101,16 +103,35 @@ async function startConsuming(ch) {
       }
 
       // 그 외 실패는 제한된 횟수만 재시도하고 DLQ 로 보낸다.
-      // 무한 재큐하면 독약 메시지 하나가 큐 전체를 막는다.
-      const deaths = msg.properties.headers?.['x-death']?.[0]?.count ?? 0;
+      //
+      // ★ Phase 09 에서 발견한 버그를 고친 자리다.
+      //   예전에는 두 분기가 **둘 다** nack(requeue=false) 였다.
+      //   requeue=false 는 항상 dead-letter 로 보내므로 재시도가 아예 없었고,
+      //   일시적 오류(client_login_timeout)도 첫 실패에 DLQ 로 갔다(x-death count=1).
+      //
+      //   이제는 재시도 횟수를 직접 세고 지연 큐로 보낸다.
+      //   x-death 는 브로커가 매기는 값이라 재시도 경로를 거치면 의미가 흐려져
+      //   우리가 붙인 x-retry-count 를 기준으로 삼는다.
+      const attempt = (msg.properties.headers?.['x-retry-count'] ?? 0) + 1;
       mqConsumed.inc({ outcome: 'error' });
-      if (deaths >= MQ_MAX_RETRY) {
+
+      if (attempt > MQ_MAX_RETRY) {
         mqDlq.inc();
         ch.nack(msg, false, false);      // requeue=false -> DLQ 로 간다
+        process.stderr.write(
+          `worker_dlq attempt=${attempt} ${err.code ?? ''} ${err.message}\n`,
+        );
       } else {
-        ch.nack(msg, false, false);      // x-dead-letter 설정이 재시도/DLQ 를 처리
+        // 지연 큐로 보내고 원본은 ack 한다.
+        // ack 를 안 하면 원본이 unacked 로 남아 prefetch 를 잡아먹는다.
+        mqRetries.inc();
+        scheduleRetry(ch, msg, attempt);
+        ch.ack(msg);
+        process.stderr.write(
+          `worker_retry attempt=${attempt}/${MQ_MAX_RETRY} after=${MQ_RETRY_DELAY_MS}ms `
+          + `${err.code ?? ''} ${err.message}\n`,
+        );
       }
-      process.stderr.write(`worker_error ${err.code ?? ''} ${err.message}\n`);
     } finally {
       mqProcessDuration.observe(Number(process.hrtime.bigint() - t0) / 1e9);
     }
