@@ -14,7 +14,7 @@
 ![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600?style=flat-square&logo=rabbitmq&logoColor=white&labelColor=1d1d1f)
 ![k6](https://img.shields.io/badge/k6-0.56-7D64FF?style=flat-square&logo=k6&logoColor=white&labelColor=1d1d1f)
 
-[빠른 시작](#빠른-시작) · [배운 것](#배운-것) · [실험 기록](docs/labs/) · [최종 검증](docs/labs/09-final.md) · [클라우드 설계](docs/labs/10-cloud.md)
+[처음부터 읽기](docs/walkthrough.md) · [빠른 시작](#빠른-시작) · [배운 것](#배운-것) · [실험 기록](docs/labs/) · [최종 검증](docs/labs/09-final.md) · [클라우드 설계](docs/labs/10-cloud.md)
 
 </div>
 
@@ -126,7 +126,7 @@ git checkout phase-05    # 그때 그 구성 그대로
 
 | # | 주제 | 무엇을 터뜨렸나 | 결과 | |
 |:--:|:--|:--|:--|:--:|
-| 01 | 취약 기준선 | 튜닝 없이 한계까지 | 천장 2,000 RPS · 병목은 앱 단일 스레드 CPU (요청당 515µs) | [📄](docs/labs/01-baseline.md) |
+| 01 | 취약 기준선 | 튜닝 없이 한계까지 | 천장 2,000 RPS · 병목은 앱 단일 스레드 CPU (요청당 518µs) | [📄](docs/labs/01-baseline.md) |
 | 02 | TLS 핸드쉐이크 | 세션 재사용 강제 해제 | 천장 절반으로 하락 · 프록시 오프로딩으로 회복 | [📄](docs/labs/02-tls.md) |
 | 03 | 로드밸런서 | 알고리즘 교체 · 헬스체크 제거 | least-conn이 p99 7.4배 · drain 유무가 p99 45배 | [📄](docs/labs/03-loadbalancer.md) |
 | 04 | 앱서버 한계 | CPU/메모리를 직접 태움 | 요청당 CPU가 천장 결정 · shedding이 p50 44배 단축 | [📄](docs/labs/04-app-server.md) |
@@ -186,7 +186,7 @@ flowchart LR
 
 | 계층 | 계산 | 필요 | 실제 | 배수 |
 |---|---|--:|--:|--:|
-| 앱 CPU | `1000 ÷ (1÷515µs)` | 0.52 코어 | 6.0 | 11.5× |
+| 앱 CPU | `1000 ÷ (1÷518µs)` | 0.52 코어 | 6.0 | 11.5× |
 | DB 커넥션 | `(1000×0.288) × 1.9ms` | 0.55개 | 22 | 40× |
 | 워커 | `(1000×0.288) × 44.9ms ÷ 20` | 1대 | 4 | 4× |
 | DB 메모리 | `10MB + 3.1MB × 22` | **78MB** | **79MB** | **1.01×** |
@@ -275,6 +275,7 @@ app/            Fastify + Drizzle 앱
   └ reservation.js  대상 라우트
 k6/             부하 스크립트 (final.js = Phase 09 시나리오 3종)
 scripts/        단계별 실행 래퍼 + 분석기 + 용량 산정
+docs/walkthrough.md  처음 보는 사람용 안내서 — 흐름과 도구 선택 근거
 docs/labs/      실험 기록 10편 — 이 저장소의 본체
 docs/slo.md     SLO/SLI 정의와 알람 임계치
 results/        k6 원본 출력 (git 미추적)
