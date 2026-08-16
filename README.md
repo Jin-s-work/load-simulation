@@ -14,7 +14,7 @@
 ![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-FF6600?style=flat-square&logo=rabbitmq&logoColor=white&labelColor=1d1d1f)
 ![k6](https://img.shields.io/badge/k6-0.56-7D64FF?style=flat-square&logo=k6&logoColor=white&labelColor=1d1d1f)
 
-[처음부터 읽기](docs/walkthrough.md) · [빠른 시작](#빠른-시작) · [배운 것](#배운-것) · [실험 기록](docs/labs/) · [최종 검증](docs/labs/09-final.md) · [클라우드 설계](docs/labs/10-cloud.md)
+[처음부터 읽기](docs/study-guide.md) · [빠른 시작](#빠른-시작) · [배운 것](#배운-것) · [실험 기록](docs/labs/) · [최종 검증](docs/labs/09-final.md) · [클라우드 설계](docs/labs/10-cloud.md)
 
 </div>
 
@@ -275,7 +275,8 @@ app/            Fastify + Drizzle 앱
   └ reservation.js  대상 라우트
 k6/             부하 스크립트 (final.js = Phase 09 시나리오 3종)
 scripts/        단계별 실행 래퍼 + 분석기 + 용량 산정
-docs/walkthrough.md  처음 보는 사람용 안내서 — 흐름과 도구 선택 근거
+docs/study-guide.md  원리부터 이해하기 — 개념·판단 근거·막혔던 지점
+docs/walkthrough.md  흐름 요약 — 무슨 순서로 뭘 했나
 docs/labs/      실험 기록 10편 — 이 저장소의 본체
 docs/slo.md     SLO/SLI 정의와 알람 임계치
 results/        k6 원본 출력 (git 미추적)
